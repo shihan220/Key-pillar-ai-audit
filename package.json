@@ -6,23 +6,49 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "backend:dev": "ts-node -r tsconfig-paths/register --project backend/tsconfig.json backend/src/main.ts",
+    "backend:build": "tsc -p backend/tsconfig.build.json",
+    "backend:start": "node backend/dist/main.js",
+    "prisma:generate": "prisma generate",
+    "prisma:validate": "prisma validate",
+    "prisma:push": "prisma db push",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio",
+    "prisma:seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@nestjs/common": "^11.1.19",
+    "@nestjs/config": "^4.0.2",
+    "@nestjs/core": "^11.1.19",
+    "@nestjs/platform-express": "^11.1.19",
+    "@prisma/client": "^7.8.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
     "next": "16.2.6",
     "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "react-dom": "18.3.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2"
   },
   "devDependencies": {
     "@types/node": "20.14.10",
     "@types/react": "18.3.3",
     "@types/react-dom": "18.3.0",
     "autoprefixer": "10.4.19",
+    "dotenv": "^17.4.2",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
     "postcss": "8.5.14",
+    "prisma": "^7.8.0",
     "tailwindcss": "3.4.4",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "tsx": "^4.21.0",
     "typescript": "5.5.3"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "overrides": {
     "postcss": "8.5.14"

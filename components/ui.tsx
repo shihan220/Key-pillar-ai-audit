@@ -181,20 +181,22 @@ export function ConfirmDialog({
   message,
   onCancel,
   onConfirm,
-  confirmLabel = "Delete"
+  confirmLabel = "Delete",
+  cancelLabel = "Cancel"
 }: {
   title: string;
   message: string;
   onCancel: () => void;
   onConfirm: () => void;
   confirmLabel?: string;
+  cancelLabel?: string;
 }) {
   return (
     <Modal title={title} onClose={onCancel} showCloseButton={false}>
       <p className="mb-6 text-sm text-neutral-700">{message}</p>
       <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
         <Button variant="secondary" onClick={onCancel}>
-          Cancel
+          {cancelLabel}
         </Button>
         <Button variant="danger" onClick={onConfirm}>
           {confirmLabel}

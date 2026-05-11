@@ -1,0 +1,186 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  DEVELOPER
+}
+
+enum AccountStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ProjectStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+  ARCHIVED
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  FAILED
+  WAITING_FOR_APPROVAL
+  COMPLETE
+}
+
+enum CommentType {
+  NORMAL_COMMENT
+  ISSUE_COMMENT
+}
+
+model User {
+  id            String        @id @default(cuid())
+  name          String        @unique
+  role          Role
+  passwordHash  String        @map("password_hash")
+  accountStatus AccountStatus @default(ACTIVE) @map("account_status")
+  lastLoginAt   DateTime?     @map("last_login_at")
+  deactivatedAt DateTime?     @map("deactivated_at")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+
+  createdProjects            Project[]           @relation("ProjectCreatedBy")
+  uploadedProjectAttachments ProjectAttachment[] @relation("ProjectAttachmentUploadedBy")
+  assignedTasks              Task[]              @relation("TaskAssignedDeveloper")
+  createdTasks               Task[]              @relation("TaskCreatedBy")
+  approvedTasks              Task[]              @relation("TaskApprovedBy")
+  comments                   TaskComment[]       @relation("TaskCommentAuthor")
+  taskHistoryEntries         TaskHistory[]       @relation("TaskHistoryActor")
+  auditLogs                  AuditLog[]          @relation("AuditLogActor")
+
+  @@map("users")
+}
+
+model Project {
+  id          String        @id @default(cuid())
+  name        String
+  description String
+  status      ProjectStatus @default(NOT_STARTED)
+  archivedAt  DateTime?     @map("archived_at")
+  deletedAt   DateTime?     @map("deleted_at")
+  createdById String?       @map("created_by_id")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  createdBy   User?               @relation("ProjectCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  attachments ProjectAttachment[]
+  tasks       Task[]
+
+  @@index([status])
+  @@index([createdById])
+  @@map("projects")
+}
+
+model ProjectAttachment {
+  id           String   @id @default(cuid())
+  projectId    String   @map("project_id")
+  fileName     String   @map("file_name")
+  storageUrl   String   @map("storage_url")
+  mimeType     String?  @map("mime_type")
+  uploadedById String?  @map("uploaded_by_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  project    Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  uploadedBy User?   @relation("ProjectAttachmentUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([uploadedById])
+  @@map("project_attachments")
+}
+
+model Task {
+  id                     String     @id @default(cuid())
+  projectId              String     @map("project_id")
+  assignedDeveloperId    String     @map("assigned_developer_id")
+  createdById            String?    @map("created_by_id")
+  approvedById           String?    @map("approved_by_id")
+  title                  String
+  description            String
+  status                 TaskStatus @default(PENDING)
+  dueAt                  DateTime   @map("due_at")
+  startedAt              DateTime?  @map("started_at")
+  submittedForApprovalAt DateTime?  @map("submitted_for_approval_at")
+  approvedAt             DateTime?  @map("approved_at")
+  completedAt            DateTime?  @map("completed_at")
+  deletedAt              DateTime?  @map("deleted_at")
+  createdAt              DateTime   @default(now()) @map("created_at")
+  updatedAt              DateTime   @updatedAt @map("updated_at")
+
+  project           Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignedDeveloper User          @relation("TaskAssignedDeveloper", fields: [assignedDeveloperId], references: [id], onDelete: Restrict)
+  createdBy         User?         @relation("TaskCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  approvedBy        User?         @relation("TaskApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  comments          TaskComment[]
+  historyEntries    TaskHistory[]
+
+  @@index([projectId])
+  @@index([assignedDeveloperId])
+  @@index([createdById])
+  @@index([approvedById])
+  @@index([status])
+  @@index([dueAt])
+  @@map("tasks")
+}
+
+model TaskComment {
+  id        String      @id @default(cuid())
+  taskId    String      @map("task_id")
+  authorId  String      @map("author_id")
+  type      CommentType
+  body      String
+  createdAt DateTime    @default(now()) @map("created_at")
+  updatedAt DateTime    @updatedAt @map("updated_at")
+
+  task   Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  author User @relation("TaskCommentAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([taskId, createdAt])
+  @@index([authorId])
+  @@map("task_comments")
+}
+
+model TaskHistory {
+  id        String   @id @default(cuid())
+  taskId    String   @map("task_id")
+  actorId   String?  @map("actor_id")
+  action    String
+  oldValue  Json?    @map("old_value")
+  newValue  Json?    @map("new_value")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  task  Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  actor User? @relation("TaskHistoryActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([taskId, createdAt])
+  @@index([actorId])
+  @@map("task_history")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?  @map("actor_id")
+  actorName  String   @map("actor_name")
+  actorRole  Role?    @map("actor_role")
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String?  @map("entity_id")
+  entityName String   @map("entity_name")
+  oldValue   Json?    @map("old_value")
+  newValue   Json?    @map("new_value")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  actor User? @relation("AuditLogActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([action])
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}

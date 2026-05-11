@@ -116,6 +116,7 @@ export default function Home() {
   const [modal, setModal] = useState<ModalState>(null);
   const [deleteTaskId, setDeleteTaskId] = useState<string | null>(null);
   const [deleteProjectId, setDeleteProjectId] = useState<string | null>(null);
+  const [approveTaskId, setApproveTaskId] = useState<string | null>(null);
   const [loginHistoryUserId, setLoginHistoryUserId] = useState<string | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [loginError, setLoginError] = useState("");
@@ -670,6 +671,19 @@ export default function Home() {
           onConfirm={() => deleteProject(deleteProjectId)}
         />
       )}
+      {approveTaskId && (
+        <ConfirmDialog
+          title="Approve Task"
+          message="Are you sure?"
+          confirmLabel="Yes"
+          cancelLabel="No"
+          onCancel={() => setApproveTaskId(null)}
+          onConfirm={() => {
+            approveTask(approveTaskId);
+            setApproveTaskId(null);
+          }}
+        />
+      )}
       {loginHistoryUserId && (
         <LoginHistoryModal
           user={users.find((item) => item.id === loginHistoryUserId)}
@@ -756,7 +770,7 @@ export default function Home() {
                   </div>
                 </div>
                 <div className="flex flex-col gap-2 sm:flex-row">
-                  <Button onClick={() => approveTask(task.id)}>Approve</Button>
+                  <Button onClick={() => setApproveTaskId(task.id)}>Approve</Button>
                   <Button
                     variant="secondary"
                     onClick={() => openTaskDetails(task.id)}
@@ -955,7 +969,7 @@ export default function Home() {
                       Reassign developer
                     </Button>
                     {task.status === "Waiting for Approval" && (
-                      <Button onClick={() => approveTask(task.id)}>Approve task</Button>
+                      <Button onClick={() => setApproveTaskId(task.id)}>Approve task</Button>
                     )}
                   </ActionGroup>
                 </Cell>
@@ -1064,7 +1078,12 @@ export default function Home() {
                 </>
               )}
               {task.status === "Failed" && (
-                <Button onClick={() => changeTaskStatus(task.id, "Waiting for Approval")}>Send for Approval</Button>
+                <>
+                  <Button variant="secondary" onClick={() => changeTaskStatus(task.id, "In Progress")}>
+                    Remove Failed Status
+                  </Button>
+                  <Button onClick={() => changeTaskStatus(task.id, "Waiting for Approval")}>Send for Approval</Button>
+                </>
               )}
               <Button variant="secondary" onClick={() => setModal({ name: "edit-task", taskId: task.id })}>
                 Edit Task
@@ -1081,7 +1100,9 @@ export default function Home() {
               <Button variant="secondary" onClick={() => setModal({ name: "reassign-task", taskId: task.id })}>
                 Reassign Task
               </Button>
-              {task.status === "Waiting for Approval" && <Button onClick={() => approveTask(task.id)}>Approve Task</Button>}
+              {task.status === "Waiting for Approval" && (
+                <Button onClick={() => setApproveTaskId(task.id)}>Approve Task</Button>
+              )}
               <Button variant="secondary">View History</Button>
             </ActionGroup>
           )}
