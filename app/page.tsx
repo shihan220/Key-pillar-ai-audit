@@ -707,10 +707,12 @@ export default function Home() {
       <main className="flex min-h-screen items-center justify-center bg-white p-4">
         <Card className="w-full max-w-md p-6">
           <div className="mb-8 text-center">
-            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-md border border-black text-sm font-semibold">
-              KP
-            </div>
-            <p className="text-sm font-semibold text-black">Key Pillar Ai</p>
+            <img
+              src="/brand/keypillar-ai-logo.jpeg"
+              alt="Keypillar AI logo"
+              className="mx-auto mb-4 h-14 w-auto object-contain"
+            />
+            <p className="text-sm font-semibold text-black">Keypillar AI</p>
             <h1 className="mt-2 text-2xl font-semibold text-black">Audit Log & Task Tracking</h1>
             <p className="mt-2 text-sm text-neutral-600">Internal access only</p>
           </div>
@@ -762,8 +764,17 @@ export default function Home() {
         }`}
       >
         <div className="mb-8">
-          <div className="text-lg font-semibold">Key Pillar Ai</div>
-          <div className="text-sm text-neutral-600">Audit Log & Task Tracking</div>
+          <div className="flex items-center gap-3">
+            <img
+              src="/brand/keypillar-ai-logo.jpeg"
+              alt="Keypillar AI logo"
+              className="h-10 w-10 rounded-md object-cover"
+            />
+            <div>
+              <div className="text-lg font-semibold">Keypillar AI</div>
+              <div className="text-sm text-neutral-600">Audit Log & Task Tracking</div>
+            </div>
+          </div>
         </div>
         <nav className="space-y-2">
           {navItems.map(([key, label]) => (
