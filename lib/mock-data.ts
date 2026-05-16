@@ -4,24 +4,24 @@ export const mockUsers: User[] = [
   {
     id: "u-admin",
     name: "Admin",
+    email: "admin@keypillarai.local",
     role: "Admin",
-    password: "admin123",
     accountStatus: "Active",
     lastLogin: "9 May 2026, 9:00 AM"
   },
   {
     id: "u-rahim",
     name: "Rahim",
+    email: "rahim@keypillarai.local",
     role: "Developer",
-    password: "dev123",
     accountStatus: "Active",
     lastLogin: "9 May 2026, 10:15 AM"
   },
   {
     id: "u-karim",
     name: "Karim",
+    email: "karim@keypillarai.local",
     role: "Developer",
-    password: "dev123",
     accountStatus: "Active",
     lastLogin: "8 May 2026, 4:30 PM"
   }

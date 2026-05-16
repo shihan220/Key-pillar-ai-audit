@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   Badge,
   Button,
@@ -17,8 +17,32 @@ import {
   Table,
   Textarea
 } from "@/components/ui";
-import { mockAuditLogs, mockComments, mockHistory, mockProjects, mockTasks, mockUsers } from "@/lib/mock-data";
-import { AuditLog, Comment, HistoryItem, Project, ProjectAttachment, ProjectStatus, Role, Status, Task, User } from "@/lib/types";
+import {
+  addComment as apiAddComment,
+  approveTask as apiApproveTask,
+  changeTaskStatus as apiChangeTaskStatus,
+  changeUserPassword,
+  clearAuthSession,
+  clockIn as apiClockIn,
+  clockOut as apiClockOut,
+  createProject as apiCreateProject,
+  createTask as apiCreateTask,
+  createUser as apiCreateUser,
+  deleteProject as apiDeleteProject,
+  deleteTask as apiDeleteTask,
+  fetchAppState,
+  fetchUserClockHistory,
+  getStoredUser,
+  login as apiLogin,
+  logout as apiLogout,
+  reassignTask as apiReassignTask,
+  removeFailedStatus as apiRemoveFailedStatus,
+  storeAuthSession,
+  updateProject as apiUpdateProject,
+  updateTask as apiUpdateTask,
+  updateUser as apiUpdateUser
+} from "@/lib/api";
+import { AuditLog, ClockSession, Comment, HistoryItem, Project, ProjectStatus, Role, Status, Task, User } from "@/lib/types";
 
 type Page =
   | "admin-dashboard"
@@ -29,7 +53,6 @@ type Page =
   | "task-details"
   | "developers"
   | "audit-logs"
-  | "qr-install"
   | "settings";
 
 type ModalState =
@@ -43,34 +66,24 @@ type ModalState =
   | { name: "change-password"; userId: string }
   | null;
 
+type AdminProjectDashboardFilter = "all" | "active" | "completed";
+type AdminTaskDashboardFilter = "all" | "pending" | "in-progress" | "failed" | "waiting-for-approval" | "complete";
+
 const statuses: Status[] = ["Pending", "In Progress", "Failed", "Waiting for Approval", "Complete"];
 const projectStatuses: ProjectStatus[] = ["Not Started", "In Progress", "Completed", "Archived"];
 
-function nowLabel() {
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-    timeZone: "Europe/London"
-  }).format(new Date());
-}
+function projectPayloadFromForm(form: FormData) {
+  const payload = new FormData();
+  payload.set("name", String(form.get("name") ?? ""));
+  payload.set("description", String(form.get("description") ?? ""));
+  payload.set("status", String(form.get("status") ?? "Not Started"));
 
-function makeId(prefix: string) {
-  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function projectAttachmentFromForm(form: FormData, existing?: ProjectAttachment): ProjectAttachment | undefined {
   const file = form.get("attachment");
   if (file instanceof File && file.size > 0) {
-    return {
-      name: file.name,
-      url: URL.createObjectURL(file)
-    };
+    payload.set("attachment", file);
   }
-  return existing;
+
+  return payload;
 }
 
 function toDateInputValue(dateTime: string) {
@@ -101,16 +114,54 @@ function splitDateTime(dateTime: string) {
   };
 }
 
+function formatDuration(milliseconds: number) {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":");
+}
+
+function formatWorkedDuration(milliseconds: number) {
+  const totalMinutes = Math.max(0, Math.floor(milliseconds / 60000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${hours}h ${minutes}m`;
+}
+
+function formatWorkDate(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  }).format(parsed);
+}
+
+function formatWorkTime(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return new Intl.DateTimeFormat("en-GB", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true
+  })
+    .format(parsed)
+    .toUpperCase();
+}
+
 export default function Home() {
-  const [users, setUsers] = useState<User[]>(mockUsers);
-  const [projects, setProjects] = useState<Project[]>(mockProjects);
-  const [tasks, setTasks] = useState<Task[]>(mockTasks);
-  const [comments, setComments] = useState<Comment[]>(mockComments);
-  const [history, setHistory] = useState<HistoryItem[]>(mockHistory);
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(mockAuditLogs);
+  const [users, setUsers] = useState<User[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [activeClockSession, setActiveClockSession] = useState<ClockSession | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [page, setPage] = useState<Page>("admin-dashboard");
-  const [selectedTaskId, setSelectedTaskId] = useState<string>("t-dashboard");
+  const [selectedTaskId, setSelectedTaskId] = useState<string>("");
   const [taskReturnPage, setTaskReturnPage] = useState<Page>("tasks");
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [modal, setModal] = useState<ModalState>(null);
@@ -118,8 +169,20 @@ export default function Home() {
   const [deleteProjectId, setDeleteProjectId] = useState<string | null>(null);
   const [approveTaskId, setApproveTaskId] = useState<string | null>(null);
   const [loginHistoryUserId, setLoginHistoryUserId] = useState<string | null>(null);
+  const [historyModalTab, setHistoryModalTab] = useState<"login" | "work">("login");
+  const [developerWorkSessions, setDeveloperWorkSessions] = useState<ClockSession[]>([]);
+  const [developerWorkHistoryLoading, setDeveloperWorkHistoryLoading] = useState(false);
+  const [developerWorkHistoryError, setDeveloperWorkHistoryError] = useState("");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [loginError, setLoginError] = useState("");
+  const [sessionError, setSessionError] = useState("");
+  const [isRestoringSession, setIsRestoringSession] = useState(true);
+  const [isAppLoading, setIsAppLoading] = useState(false);
+  const [showClockInPrompt, setShowClockInPrompt] = useState(false);
+  const [clockOutPromptMode, setClockOutPromptMode] = useState<"clock-out" | "logout" | null>(null);
+  const [clockTick, setClockTick] = useState(() => Date.now());
+  const [adminProjectDashboardFilter, setAdminProjectDashboardFilter] = useState<AdminProjectDashboardFilter>("all");
+  const [adminTaskDashboardFilter, setAdminTaskDashboardFilter] = useState<AdminTaskDashboardFilter>("all");
   const [myTaskFilter, setMyTaskFilter] = useState<Status | "All">("All");
   const [auditFilters, setAuditFilters] = useState({
     user: "",
@@ -134,6 +197,136 @@ export default function Home() {
   const selectedTask = activeTasks.find((task) => task.id === selectedTaskId) ?? activeTasks[0];
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
   const developers = users.filter((user) => user.role === "Developer");
+  const activeClockDuration = useMemo(() => {
+    if (!activeClockSession) return "";
+    const startedAt = Date.parse(activeClockSession.clockInAt);
+    if (Number.isNaN(startedAt)) return "00:00:00";
+    return formatDuration(clockTick - startedAt);
+  }, [activeClockSession, clockTick]);
+
+  const resetAppState = () => {
+    setUsers([]);
+    setProjects([]);
+    setTasks([]);
+    setComments([]);
+    setHistory([]);
+    setAuditLogs([]);
+    setActiveClockSession(null);
+    setSelectedTaskId("");
+    setSelectedProjectId("");
+    setShowClockInPrompt(false);
+    setClockOutPromptMode(null);
+  };
+
+  const applyAppState = (
+    data: {
+      users: User[];
+      projects: Project[];
+      tasks: Task[];
+      comments: Comment[];
+      history: HistoryItem[];
+      auditLogs: AuditLog[];
+      activeClockSession: ClockSession | null;
+    },
+    preserveUserId?: string | null
+  ) => {
+    setUsers(data.users);
+    setProjects(data.projects);
+    setTasks(data.tasks);
+    setComments(data.comments);
+    setHistory(data.history);
+    setAuditLogs(data.auditLogs);
+    setActiveClockSession(data.activeClockSession);
+
+    if (preserveUserId) {
+      setCurrentUser(data.users.find((user) => user.id === preserveUserId) ?? null);
+    }
+    if (selectedProjectId && !data.projects.some((project) => project.id === selectedProjectId)) {
+      setSelectedProjectId("");
+    }
+    if (selectedTaskId && !data.tasks.some((task) => task.id === selectedTaskId && !task.deleted)) {
+      setSelectedTaskId(data.tasks.find((task) => !task.deleted)?.id ?? "");
+    }
+  };
+
+  const refreshState = async (preserveUserId = currentUser?.id) => {
+    setIsAppLoading(true);
+    try {
+      const data = await fetchAppState();
+      applyAppState(data, preserveUserId);
+      setSessionError("");
+      return data;
+    } finally {
+      setIsAppLoading(false);
+    }
+  };
+
+  const showActionError = (error: unknown, fallback = "Request failed.") => {
+    const message = error instanceof Error ? error.message : fallback;
+    console.error(error);
+    const normalized = message.toLowerCase();
+    if (
+      normalized.includes("authentication required") ||
+      normalized.includes("invalid or expired token") ||
+      normalized.includes("unauthorized")
+    ) {
+      clearAuthSession();
+      resetAppState();
+      setCurrentUser(null);
+      setSessionError("Your session expired. Please sign in again.");
+      return;
+    }
+    window.alert(message);
+  };
+
+  useEffect(() => {
+    const storedUser = getStoredUser();
+    if (!storedUser) {
+      setIsRestoringSession(false);
+      return;
+    }
+
+    setCurrentUser(storedUser);
+    setPage(storedUser.role === "Admin" ? "admin-dashboard" : "developer-dashboard");
+    void refreshState(storedUser.id)
+      .catch((error) => {
+        console.error(error);
+        clearAuthSession();
+        resetAppState();
+        setCurrentUser(null);
+        setSessionError("Unable to restore the previous session. Please sign in again.");
+      })
+      .finally(() => {
+        setIsRestoringSession(false);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!activeClockSession) return;
+    const intervalId = window.setInterval(() => {
+      setClockTick(Date.now());
+    }, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [activeClockSession]);
+
+  useEffect(() => {
+    if (!loginHistoryUserId || currentUser?.role !== "Admin") return;
+
+    setDeveloperWorkHistoryLoading(true);
+    setDeveloperWorkHistoryError("");
+    void fetchUserClockHistory(loginHistoryUserId)
+      .then((response) => {
+        setDeveloperWorkSessions(response.sessions);
+      })
+      .catch((error) => {
+        setDeveloperWorkSessions([]);
+        setDeveloperWorkHistoryError(error instanceof Error ? error.message : "Unable to load work history.");
+      })
+      .finally(() => {
+        setDeveloperWorkHistoryLoading(false);
+      });
+  }, [currentUser?.role, loginHistoryUserId]);
 
   const projectTaskCounts = (projectId: string) => {
     const projectTasks = activeTasks.filter((task) => task.projectId === projectId);
@@ -148,99 +341,77 @@ export default function Home() {
     return project.status;
   };
 
-  const addAudit = (
-    action: string,
-    entityType: string,
-    entityName: string,
-    oldValue?: string,
-    newValue?: string,
-    actor = currentUser
-  ) => {
-    if (!actor) return;
-    setAuditLogs((logs) => [
-      {
-        id: makeId("audit"),
-        dateTime: nowLabel(),
-        user: actor.name,
-        role: actor.role,
-        action,
-        entityType,
-        entityName,
-        oldValue,
-        newValue
-      },
-      ...logs
-    ]);
-  };
-
-  const addHistory = (taskId: string, action: string, oldValue?: string, newValue?: string, actor = currentUser) => {
-    if (!actor) return;
-    setHistory((items) => [
-      {
-        id: makeId("history"),
-        taskId,
-        action,
-        user: actor.name,
-        role: actor.role,
-        oldValue,
-        newValue,
-        dateTime: nowLabel()
-      },
-      ...items
-    ]);
-  };
-
-  const updateTask = (taskId: string, patch: Partial<Task>, action: string, oldValue?: string, newValue?: string) => {
-    const task = tasks.find((item) => item.id === taskId);
-    if (!task) return;
-    setTasks((items) =>
-      items.map((item) => (item.id === taskId ? { ...item, ...patch, lastUpdated: nowLabel() } : item))
-    );
-    addAudit(action, "Task", task.title, oldValue, newValue);
-    addHistory(taskId, action, oldValue, newValue);
-  };
-
-  const login = (event: FormEvent<HTMLFormElement>) => {
+  const login = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const password = String(new FormData(event.currentTarget).get("password") ?? "");
-    const nextUser =
-      password === "admin123"
-        ? users.find((user) => user.role === "Admin")
-        : password === "dev123"
-          ? users.find((user) => user.name === "Rahim")
-          : null;
+    try {
+      const formData = new FormData(event.currentTarget);
+      const email = String(formData.get("email") ?? "");
+      const password = String(formData.get("password") ?? "");
+      const response = await apiLogin(email, password);
+      storeAuthSession(response.accessToken, response.user);
+      setCurrentUser(response.user);
+      setPage(response.user.role === "Admin" ? "admin-dashboard" : "developer-dashboard");
+      setLoginError("");
+      setSessionError("");
+      try {
+        const data = await refreshState(response.user.id);
+        if (response.user.role === "Developer" && !data.activeClockSession) {
+          setShowClockInPrompt(true);
+        }
+      } catch (error) {
+        setSessionError(error instanceof Error ? error.message : "Unable to load app state after login.");
+      }
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : "Login failed.");
+      setIsAppLoading(false);
+    }
+  };
 
-    if (!nextUser || nextUser.accountStatus !== "Active") {
-      setLoginError("Invalid password or inactive account.");
+  const performLogout = async () => {
+    try {
+      if (currentUser) await apiLogout();
+    } catch (error) {
+      console.error(error);
+    } finally {
+      clearAuthSession();
+      resetAppState();
+      setCurrentUser(null);
+      setMobileOpen(false);
+      setPage("admin-dashboard");
+    }
+  };
+
+  const handleClockIn = async () => {
+    try {
+      const response = await apiClockIn();
+      setActiveClockSession(response.session);
+      setShowClockInPrompt(false);
+      setClockTick(Date.now());
+    } catch (error) {
+      showActionError(error, "Failed to clock in.");
+    }
+  };
+
+  const handleClockOutConfirmation = async () => {
+    try {
+      await apiClockOut();
+      setActiveClockSession(null);
+      const shouldLogout = clockOutPromptMode === "logout";
+      setClockOutPromptMode(null);
+      if (shouldLogout) {
+        await performLogout();
+      }
+    } catch (error) {
+      showActionError(error, "Failed to clock out.");
+    }
+  };
+
+  const logout = async () => {
+    if (currentUser?.role === "Developer" && activeClockSession) {
+      setClockOutPromptMode("logout");
       return;
     }
-
-    const loginTime = nowLabel();
-    const updatedUser = { ...nextUser, lastLogin: loginTime };
-    setUsers((items) => items.map((user) => (user.id === updatedUser.id ? updatedUser : user)));
-    setCurrentUser(updatedUser);
-    setPage(updatedUser.role === "Admin" ? "admin-dashboard" : "developer-dashboard");
-    setLoginError("");
-    setAuditLogs((logs) => [
-      {
-        id: makeId("audit"),
-        dateTime: loginTime,
-        user: updatedUser.name,
-        role: updatedUser.role,
-        action: "User logged in",
-        entityType: "User",
-        entityName: updatedUser.name
-      },
-      ...logs
-    ]);
-  };
-
-  const logout = () => {
-    if (currentUser) {
-      addAudit("User logged out", "User", currentUser.name, undefined, undefined, currentUser);
-    }
-    setCurrentUser(null);
-    setMobileOpen(false);
+    await performLogout();
   };
 
   const navigate = (nextPage: Page) => {
@@ -253,219 +424,248 @@ export default function Home() {
     setMobileOpen(false);
   };
 
+  const openAdminDashboardTarget = (
+    nextPage: Extract<Page, "projects" | "tasks" | "developers">,
+    options?: {
+      projectFilter?: AdminProjectDashboardFilter;
+      taskFilter?: AdminTaskDashboardFilter;
+      path?: string;
+    }
+  ) => {
+    if (!currentUser || currentUser.role !== "Admin") return;
+    setAdminProjectDashboardFilter(options?.projectFilter ?? "all");
+    setAdminTaskDashboardFilter(options?.taskFilter ?? "all");
+    setPage(nextPage);
+    setMobileOpen(false);
+    if (typeof window !== "undefined" && options?.path) {
+      window.history.pushState({}, "", options.path);
+    }
+  };
+
   const openTaskDetails = (taskId: string) => {
     setSelectedTaskId(taskId);
     setTaskReturnPage(page === "task-details" ? (currentUser?.role === "Admin" ? "tasks" : "my-tasks") : page);
     navigate("task-details");
   };
 
-  const createProject = (event: FormEvent<HTMLFormElement>) => {
+  const createProject = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const project: Project = {
-      id: makeId("project"),
-      name: String(form.get("name")),
-      description: String(form.get("description")),
-      attachment: projectAttachmentFromForm(form),
-      status: form.get("status") as ProjectStatus,
-      createdDate: nowLabel()
-    };
-    setProjects((items) => [project, ...items]);
-    addAudit(
-      "Project created",
-      "Project",
-      project.name,
-      undefined,
-      project.attachment ? `${project.status} with ${project.attachment.name}` : project.status
-    );
-    setModal(null);
-  };
-
-  const editProject = (event: FormEvent<HTMLFormElement>, projectId: string) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const project = projects.find((item) => item.id === projectId);
-    if (!project) return;
-    const nextStatus = form.get("status") as ProjectStatus;
-    const nextAttachment = projectAttachmentFromForm(form, project.attachment);
-    setProjects((items) =>
-      items.map((item) =>
-        item.id === projectId
-          ? {
-              ...item,
-              name: String(form.get("name")),
-              description: String(form.get("description")),
-              attachment: nextAttachment,
-              status: nextStatus,
-              archived: nextStatus === "Archived"
-            }
-          : item
-      )
-    );
-    addAudit(
-      "Project edited",
-      "Project",
-      project.name,
-      project.attachment?.name ?? project.status,
-      nextAttachment?.name ?? nextStatus
-    );
-    setModal(null);
-  };
-
-  const deleteProject = (projectId: string) => {
-    const project = projects.find((item) => item.id === projectId);
-    if (!project) return;
-    setProjects((items) => items.filter((item) => item.id !== projectId));
-    setTasks((items) => items.map((item) => (item.projectId === projectId ? { ...item, deleted: true } : item)));
-    if (selectedProjectId === projectId) setSelectedProjectId("");
-    setDeleteProjectId(null);
-    addAudit("Project deleted", "Project", project.name, project.status, "Deleted");
-  };
-
-  const createTask = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const task: Task = {
-      id: makeId("task"),
-      title: String(form.get("title")),
-      description: String(form.get("description")),
-      projectId: String(form.get("projectId")),
-      developerId: String(form.get("developerId")),
-      status: "Pending",
-      dueDate: String(form.get("dueDate")),
-      createdDate: nowLabel(),
-      lastUpdated: nowLabel()
-    };
-    setTasks((items) => [task, ...items]);
-    addAudit("Task created", "Task", task.title, undefined, "Pending");
-    addHistory(task.id, "Task created", undefined, task.title);
-    addHistory(task.id, "Task assigned", undefined, developerName(task.developerId));
-    setSelectedTaskId(task.id);
-    setModal(null);
-  };
-
-  const editTask = (event: FormEvent<HTMLFormElement>, taskId: string) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const task = tasks.find((item) => item.id === taskId);
-    if (!task) return;
-    const patch: Partial<Task> = {
-      title: String(form.get("title")),
-      description: String(form.get("description")),
-      dueDate: String(form.get("dueDate"))
-    };
-    if (currentUser?.role === "Admin") {
-      patch.projectId = String(form.get("projectId"));
-      patch.developerId = String(form.get("developerId"));
-      patch.status = form.get("status") as Status;
+    if (!currentUser) return;
+    try {
+      const form = new FormData(event.currentTarget);
+      await apiCreateProject(projectPayloadFromForm(form));
+      await refreshState(currentUser.id);
+      setModal(null);
+    } catch (error) {
+      showActionError(error, "Failed to create project.");
     }
-    updateTask(taskId, patch, "Task edited", task.title, patch.title);
-    setModal(null);
   };
 
-  const reassignTask = (event: FormEvent<HTMLFormElement>, taskId: string) => {
+  const editProject = async (event: FormEvent<HTMLFormElement>, projectId: string) => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const task = tasks.find((item) => item.id === taskId);
-    if (!task) return;
-    const oldDeveloper = developerName(task.developerId);
-    const developerId = String(form.get("developerId"));
-    updateTask(taskId, { developerId }, "Task reassigned", oldDeveloper, developerName(developerId));
-    setModal(null);
+    if (!currentUser) return;
+    const project = projects.find((item) => item.id === projectId);
+    if (!project) return;
+    try {
+      const form = new FormData(event.currentTarget);
+      await apiUpdateProject(projectId, projectPayloadFromForm(form));
+      await refreshState(currentUser.id);
+      setModal(null);
+    } catch (error) {
+      showActionError(error, "Failed to update project.");
+    }
   };
 
-  const approveTask = (taskId: string) => {
-    const task = tasks.find((item) => item.id === taskId);
-    if (!task || task.status !== "Waiting for Approval") return;
-    updateTask(taskId, { status: "Complete" }, "Task approved", "Waiting for Approval", "Complete");
+  const deleteProject = async (projectId: string) => {
+    if (!currentUser) return;
+    try {
+      await apiDeleteProject(projectId);
+      await refreshState(currentUser.id);
+      setDeleteProjectId(null);
+    } catch (error) {
+      showActionError(error, "Failed to delete project.");
+    }
   };
 
-  const deleteTask = (taskId: string) => {
-    const task = tasks.find((item) => item.id === taskId);
-    if (!task) return;
-    updateTask(taskId, { deleted: true }, "Task deleted", task.status, "Deleted");
-    setDeleteTaskId(null);
-    if (page === "task-details") setPage(currentUser?.role === "Admin" ? "tasks" : "my-tasks");
-  };
-
-  const changeTaskStatus = (taskId: string, status: Status) => {
-    const task = tasks.find((item) => item.id === taskId);
-    if (!task) return;
-    updateTask(taskId, { status }, "Task status changed", task.status, status);
-  };
-
-  const addComment = (event: FormEvent<HTMLFormElement>, taskId: string) => {
+  const createTask = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!currentUser) return;
+    try {
+      const form = new FormData(event.currentTarget);
+      const response = await apiCreateTask({
+        title: String(form.get("title")),
+        description: String(form.get("description")),
+        projectId: String(form.get("projectId")),
+        developerId: String(form.get("developerId")),
+        dueDate: String(form.get("dueDate"))
+      });
+      await refreshState(currentUser.id);
+      setSelectedTaskId(response.id);
+      setModal(null);
+    } catch (error) {
+      showActionError(error, "Failed to create task.");
+    }
+  };
+
+  const editTask = async (event: FormEvent<HTMLFormElement>, taskId: string) => {
+    event.preventDefault();
+    if (!currentUser) return;
+    try {
+      const form = new FormData(event.currentTarget);
+      const body: {
+        title: string;
+        description: string;
+        dueDate: string;
+        projectId?: string;
+        developerId?: string;
+        status?: Status;
+      } = {
+        title: String(form.get("title")),
+        description: String(form.get("description")),
+        dueDate: String(form.get("dueDate"))
+      };
+
+      if (currentUser.role === "Admin") {
+        body.projectId = String(form.get("projectId"));
+        body.developerId = String(form.get("developerId"));
+        body.status = form.get("status") as Status;
+      }
+
+      await apiUpdateTask(taskId, body);
+      await refreshState(currentUser.id);
+      setModal(null);
+    } catch (error) {
+      showActionError(error, "Failed to update task.");
+    }
+  };
+
+  const reassignTask = async (event: FormEvent<HTMLFormElement>, taskId: string) => {
+    event.preventDefault();
+    if (!currentUser) return;
+    try {
+      const form = new FormData(event.currentTarget);
+      await apiReassignTask(taskId, String(form.get("developerId")));
+      await refreshState(currentUser.id);
+      setModal(null);
+    } catch (error) {
+      showActionError(error, "Failed to reassign task.");
+    }
+  };
+
+  const approveTask = async (taskId: string) => {
+    if (!currentUser) return;
+    try {
+      await apiApproveTask(taskId);
+      await refreshState(currentUser.id);
+    } catch (error) {
+      showActionError(error, "Failed to approve task.");
+    }
+  };
+
+  const deleteTask = async (taskId: string) => {
+    if (!currentUser) return;
+    try {
+      await apiDeleteTask(taskId);
+      await refreshState(currentUser.id);
+      setDeleteTaskId(null);
+      if (page === "task-details") setPage(currentUser.role === "Admin" ? "tasks" : "my-tasks");
+    } catch (error) {
+      showActionError(error, "Failed to delete task.");
+    }
+  };
+
+  const changeTaskStatus = async (taskId: string, status: Status) => {
     if (!currentUser) return;
     const task = tasks.find((item) => item.id === taskId);
     if (!task) return;
-    const form = new FormData(event.currentTarget);
-    const type = form.get("type") as Comment["type"];
-    const text = String(form.get("text"));
-    if (!text.trim()) return;
-    const comment: Comment = {
-      id: makeId("comment"),
-      taskId,
-      writer: currentUser.name,
-      role: currentUser.role,
-      dateTime: nowLabel(),
-      text,
-      type
-    };
-    setComments((items) => [comment, ...items]);
-    addAudit(type === "Issue Comment" ? "Issue comment added" : "Comment added", "Task", task.title, undefined, text);
-    addHistory(taskId, type === "Issue Comment" ? "Issue comment added" : "Comment added", undefined, text);
-    event.currentTarget.reset();
+    try {
+      if (task.status === "Failed" && status === "In Progress") {
+        await apiRemoveFailedStatus(taskId);
+      } else {
+        await apiChangeTaskStatus(taskId, status);
+      }
+      await refreshState(currentUser.id);
+    } catch (error) {
+      showActionError(error, "Failed to update task status.");
+    }
   };
 
-  const createDeveloper = (event: FormEvent<HTMLFormElement>) => {
+  const addComment = async (event: FormEvent<HTMLFormElement>, taskId: string) => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const user: User = {
-      id: makeId("user"),
-      name: String(form.get("name")),
-      password: String(form.get("password")),
-      role: form.get("role") as Role,
-      accountStatus: form.get("accountStatus") as User["accountStatus"],
-      lastLogin: "Never"
-    };
-    setUsers((items) => [user, ...items]);
-    addAudit("Developer account created", "User", user.name);
-    setModal(null);
+    if (!currentUser) return;
+    try {
+      const form = new FormData(event.currentTarget);
+      const type = form.get("type") as Comment["type"];
+      const text = String(form.get("text"));
+      if (!text.trim()) return;
+      await apiAddComment(taskId, {
+        text,
+        type
+      });
+      await refreshState(currentUser.id);
+      event.currentTarget.reset();
+    } catch (error) {
+      showActionError(error, "Failed to add comment.");
+    }
   };
 
-  const editDeveloper = (event: FormEvent<HTMLFormElement>, userId: string) => {
+  const createDeveloper = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const user = users.find((item) => item.id === userId);
-    if (!user) return;
-    setUsers((items) =>
-      items.map((item) =>
-        item.id === userId
-          ? {
-              ...item,
-              name: String(form.get("name")),
-              role: form.get("role") as Role,
-              accountStatus: form.get("accountStatus") as User["accountStatus"]
-            }
-          : item
-      )
-    );
-    addAudit("Developer account edited", "User", user.name);
-    setModal(null);
+    if (!currentUser) return;
+    try {
+      const form = new FormData(event.currentTarget);
+      await apiCreateUser({
+        name: String(form.get("name")),
+        email: String(form.get("email")),
+        password: String(form.get("password")),
+        role: form.get("role") as Role,
+        accountStatus: form.get("accountStatus") as User["accountStatus"]
+      });
+      await refreshState(currentUser.id);
+      setModal(null);
+    } catch (error) {
+      showActionError(error, "Failed to create developer.");
+    }
   };
 
-  const changePassword = (event: FormEvent<HTMLFormElement>, userId: string) => {
+  const editDeveloper = async (event: FormEvent<HTMLFormElement>, userId: string) => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const password = String(form.get("password"));
-    const confirm = String(form.get("confirm"));
-    if (password !== confirm) return;
-    const user = users.find((item) => item.id === userId);
-    if (!user) return;
-    setUsers((items) => items.map((item) => (item.id === userId ? { ...item, password } : item)));
-    addAudit("Developer password changed by admin", "User", user.name);
-    setModal(null);
+    if (!currentUser) return;
+    try {
+      const form = new FormData(event.currentTarget);
+      await apiUpdateUser(userId, {
+        name: String(form.get("name")),
+        email: String(form.get("email")),
+        role: form.get("role") as Role,
+        accountStatus: form.get("accountStatus") as User["accountStatus"]
+      });
+      await refreshState(currentUser.id);
+      setModal(null);
+    } catch (error) {
+      showActionError(error, "Failed to update developer.");
+    }
+  };
+
+  const changePassword = async (event: FormEvent<HTMLFormElement>, userId: string) => {
+    event.preventDefault();
+    if (!currentUser) return;
+    try {
+      const form = new FormData(event.currentTarget);
+      const password = String(form.get("password"));
+      const confirm = String(form.get("confirm"));
+      if (password !== confirm) {
+        window.alert("Passwords do not match.");
+        return;
+      }
+      await changeUserPassword(userId, {
+        password,
+        confirmPassword: confirm
+      });
+      await refreshState(currentUser.id);
+      setModal(null);
+    } catch (error) {
+      showActionError(error, "Failed to change password.");
+    }
   };
 
   const projectName = (projectId: string) => projects.find((project) => project.id === projectId)?.name ?? "Unknown";
@@ -476,7 +676,6 @@ export default function Home() {
   const openProjectAttachment = (project?: Project) => {
     if (!project?.attachment) return;
     window.open(project.attachment.url, "_blank", "noopener,noreferrer");
-    addAudit("Project document opened", "Project", project.name, undefined, project.attachment.name);
   };
   const developerTasks = (userId: string) => activeTasks.filter((task) => task.developerId === userId);
   const developerDetailCounts = (userId: string) => {
@@ -492,6 +691,17 @@ export default function Home() {
       (log) => log.user === userName && (log.action === "User logged in" || log.action === "User logged out")
     );
 
+  if (isRestoringSession) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-white p-4">
+        <Card className="w-full max-w-md p-6 text-center">
+          <h1 className="text-xl font-semibold text-black">Restoring session</h1>
+          <p className="mt-2 text-sm text-neutral-600">Checking the backend connection and your saved sign-in.</p>
+        </Card>
+      </main>
+    );
+  }
+
   if (!currentUser) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-white p-4">
@@ -505,12 +715,19 @@ export default function Home() {
             <p className="mt-2 text-sm text-neutral-600">Internal access only</p>
           </div>
           <form className="space-y-4" onSubmit={login}>
+            <Input label="Email" name="email" type="email" autoComplete="username" required />
             <PasswordInput label="Password" name="password" autoComplete="current-password" required />
+            {sessionError && <p className="text-sm text-black">{sessionError}</p>}
             {loginError && <p className="text-sm text-black">{loginError}</p>}
-            <Button className="w-full" type="submit">
+            <Button className="w-full" type="submit" disabled={isAppLoading}>
               Login
             </Button>
           </form>
+          <div className="mt-4 text-xs text-neutral-600">
+            Admin: admin@keypillarai.local / admin123
+            <br />
+            Developers: rahim@keypillarai.local or karim@keypillarai.local / dev123
+          </div>
         </Card>
       </main>
     );
@@ -526,13 +743,11 @@ export default function Home() {
           ["tasks", "Tasks"],
           ["developers", "Developers"],
           ["audit-logs", "Audit Logs"],
-          ["qr-install", "QR Install"],
           ["settings", "Settings"]
         ]
       : [
           ["developer-dashboard", "My Dashboard"],
-          ["my-tasks", "My Tasks"],
-          ["qr-install", "QR Install"]
+          ["my-tasks", "My Tasks"]
         ];
 
   const pageTitle =
@@ -587,13 +802,57 @@ export default function Home() {
             </Button>
             <h1 className="truncate text-lg font-semibold sm:text-xl">{pageTitle}</h1>
           </div>
-          <div className="text-right text-sm">
-            <div className="font-medium">{authUser.name}</div>
-            <div className="text-neutral-600">{authUser.role}</div>
+          <div className="flex items-center gap-3">
+            {authUser.role === "Developer" && (
+              activeClockSession ? (
+                <div className="text-right text-sm">
+                  <div className="font-medium">Clocked in: {activeClockDuration}</div>
+                  <div className="mt-2">
+                    <Button variant="secondary" onClick={() => setClockOutPromptMode("clock-out")}>
+                      Clock Out
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <Button variant="secondary" onClick={() => setShowClockInPrompt(true)}>
+                  Start Work
+                </Button>
+              )
+            )}
+            <div className="text-right text-sm">
+              <div className="font-medium">{authUser.name}</div>
+              <div className="text-neutral-600">{authUser.role}</div>
+            </div>
           </div>
         </header>
 
         <main className="p-4 lg:p-6">
+          {sessionError && (
+            <Card className="mb-6">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="font-medium">Backend connection issue</div>
+                  <div className="mt-1 text-sm text-neutral-600">{sessionError}</div>
+                </div>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    if (!currentUser) return;
+                    void refreshState(currentUser.id).catch((error) => {
+                      setSessionError(error instanceof Error ? error.message : "Unable to load app state.");
+                    });
+                  }}
+                >
+                  Retry
+                </Button>
+              </div>
+            </Card>
+          )}
+          {isAppLoading && (
+            <Card className="mb-6">
+              <div className="text-sm text-neutral-600">Loading the latest app state from the backend.</div>
+            </Card>
+          )}
           {page === "admin-dashboard" && <AdminDashboard />}
           {page === "developer-dashboard" && <DeveloperDashboard />}
           {page === "projects" && <ProjectsPage />}
@@ -602,7 +861,6 @@ export default function Home() {
           {page === "task-details" && selectedTask && <TaskDetailsPage task={selectedTask} />}
           {page === "developers" && <DevelopersPage />}
           {page === "audit-logs" && <AuditLogsPage />}
-          {page === "qr-install" && <QrInstallPage />}
           {page === "settings" && <SettingsPage />}
         </main>
       </div>
@@ -690,6 +948,36 @@ export default function Home() {
           onClose={() => setLoginHistoryUserId(null)}
         />
       )}
+      {showClockInPrompt && authUser.role === "Developer" && (
+        <Modal title="Start Working" onClose={() => setShowClockInPrompt(false)} showCloseButton={false}>
+          <div className="space-y-6">
+            <p className="text-sm text-neutral-700">Do you want to start working?</p>
+            <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
+              <Button variant="secondary" onClick={() => setShowClockInPrompt(false)}>
+                NO
+              </Button>
+              <Button onClick={handleClockIn}>
+                YES
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {clockOutPromptMode && authUser.role === "Developer" && (
+        <Modal title="Clock Out" onClose={() => setClockOutPromptMode(null)} showCloseButton={false}>
+          <div className="space-y-6">
+            <p className="text-sm text-neutral-700">Have you finished your work?</p>
+            <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
+              <Button variant="secondary" onClick={() => setClockOutPromptMode(null)}>
+                NO
+              </Button>
+              <Button onClick={handleClockOutConfirmation}>
+                YES
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 
@@ -711,16 +999,16 @@ export default function Home() {
     return (
       <div className="space-y-6">
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          <StatCard label="Total Projects" value={counts.totalProjects} />
-          <StatCard label="Active Projects" value={counts.activeProjects} />
-          <StatCard label="Completed Projects" value={counts.completedProjects} />
-          <StatCard label="Total Tasks" value={counts.totalTasks} />
-          <StatCard label="Pending Tasks" value={counts.pending} />
-          <StatCard label="In Progress Tasks" value={counts.progress} />
-          <StatCard label="Failed Tasks" value={counts.failed} />
-          <StatCard label="Waiting for Approval Tasks" value={counts.waiting} />
-          <StatCard label="Completed Tasks" value={counts.complete} />
-          <StatCard label="Total Developers" value={counts.developers} />
+          <DashboardNavCard label="Total Projects" value={counts.totalProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "all", path: "/projects" })} />
+          <DashboardNavCard label="Active Projects" value={counts.activeProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "active", path: "/projects?status=active" })} />
+          <DashboardNavCard label="Completed Projects" value={counts.completedProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "completed", path: "/projects?status=completed" })} />
+          <DashboardNavCard label="Total Tasks" value={counts.totalTasks} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "all", path: "/tasks" })} />
+          <DashboardNavCard label="Pending Tasks" value={counts.pending} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "pending", path: "/tasks?status=pending" })} />
+          <DashboardNavCard label="In Progress Tasks" value={counts.progress} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "in-progress", path: "/tasks?status=in-progress" })} />
+          <DashboardNavCard label="Failed Tasks" value={counts.failed} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "failed", path: "/tasks?status=failed" })} />
+          <DashboardNavCard label="Waiting for Approval Tasks" value={counts.waiting} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "waiting-for-approval", path: "/tasks?status=waiting-for-approval" })} />
+          <DashboardNavCard label="Completed Tasks" value={counts.complete} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "complete", path: "/tasks?status=complete" })} />
+          <DashboardNavCard label="Total Developers" value={counts.developers} onClick={() => openAdminDashboardTarget("developers", { path: "/developers" })} />
         </div>
 
         <Card>
@@ -808,6 +1096,12 @@ export default function Home() {
   }
 
   function ProjectsPage() {
+    const filteredProjects =
+      adminProjectDashboardFilter === "active"
+        ? projects.filter((project) => resolvedProjectStatus(project) !== "Archived")
+        : adminProjectDashboardFilter === "completed"
+          ? projects.filter((project) => resolvedProjectStatus(project) === "Completed")
+          : projects;
     const projectTasks = selectedProject ? activeTasks.filter((task) => task.projectId === selectedProject.id) : [];
     const counts = selectedProject ? projectTaskCounts(selectedProject.id) : { total: 0, completed: 0 };
 
@@ -830,7 +1124,7 @@ export default function Home() {
               "Actions"
             ]}
           >
-            {projects.map((project) => {
+            {filteredProjects.map((project) => {
               const counts = projectTaskCounts(project.id);
               return (
                 <tr key={project.id} className="hover:bg-neutral-50">
@@ -928,6 +1222,18 @@ export default function Home() {
   }
 
   function TasksPage() {
+    const filteredTasks =
+      adminTaskDashboardFilter === "pending"
+        ? activeTasks.filter((task) => task.status === "Pending")
+        : adminTaskDashboardFilter === "in-progress"
+          ? activeTasks.filter((task) => task.status === "In Progress")
+          : adminTaskDashboardFilter === "failed"
+            ? activeTasks.filter((task) => task.status === "Failed")
+            : adminTaskDashboardFilter === "waiting-for-approval"
+              ? activeTasks.filter((task) => task.status === "Waiting for Approval")
+              : adminTaskDashboardFilter === "complete"
+                ? activeTasks.filter((task) => task.status === "Complete")
+                : activeTasks;
     return (
       <div className="space-y-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -936,7 +1242,7 @@ export default function Home() {
         </div>
         <Card>
           <Table headers={["Task Title", "Project", "Assigned Developer", "Status", "Due Date", "Created Date", "Actions"]}>
-            {activeTasks.map((task) => (
+            {filteredTasks.map((task) => (
               <tr key={task.id} className="hover:bg-neutral-50">
                 <Cell>
                   <div className="flex flex-wrap items-center gap-2">
@@ -1183,18 +1489,12 @@ export default function Home() {
   }
 
   function DeveloperRow({ user }: { user: User }) {
-    const [show, setShow] = useState(false);
     return (
       <tr className="hover:bg-neutral-50">
         <Cell>{user.name}</Cell>
         <Cell>{user.role}</Cell>
         <Cell>
-          <div className="flex items-center gap-2">
-            <span>{show ? user.password : "••••••••"}</span>
-            <Button variant="secondary" onClick={() => setShow((value) => !value)}>
-              {show ? "Hide" : "Show"}
-            </Button>
-          </div>
+          <span className="text-neutral-600">Stored securely</span>
         </Cell>
         <Cell>
           <Badge
@@ -1233,7 +1533,15 @@ export default function Home() {
         <div>Missed deadlines: {counts.missedDeadlines}</div>
         <div>Completed tasks: {counts.completedTasks}</div>
         <div>Failed tasks: {counts.failedTasks}</div>
-        <Button variant="secondary" onClick={() => setLoginHistoryUserId(user.id)}>
+        <Button
+          variant="secondary"
+          onClick={() => {
+            setHistoryModalTab("login");
+            setDeveloperWorkSessions([]);
+            setDeveloperWorkHistoryError("");
+            setLoginHistoryUserId(user.id);
+          }}
+        >
           View History
         </Button>
       </div>
@@ -1242,25 +1550,110 @@ export default function Home() {
 
   function LoginHistoryModal({ user, onClose }: { user?: User; onClose: () => void }) {
     const records = user ? loginHistoryForUser(user.name) : [];
+    const workRows = developerWorkSessions.map((session) => {
+      const clockIn = new Date(session.clockInAt);
+      const clockOut = session.clockOutAt ? new Date(session.clockOutAt) : null;
+      const completedDuration = clockOut ? Math.max(0, clockOut.getTime() - clockIn.getTime()) : null;
+
+      return {
+        id: session.id,
+        date: formatWorkDate(session.clockInAt),
+        clockIn: formatWorkTime(session.clockInAt),
+        clockOut: clockOut ? formatWorkTime(session.clockOutAt as string) : "In progress",
+        totalWorked: completedDuration !== null ? formatWorkedDuration(completedDuration) : "In progress",
+        completedDuration
+      };
+    });
+
+    const workSections = workRows.reduce<
+      { date: string; sessions: typeof workRows; dailyTotalMs: number }[]
+    >((groups, row) => {
+      const existing = groups.find((group) => group.date === row.date);
+      if (existing) {
+        existing.sessions.push(row);
+        existing.dailyTotalMs += row.completedDuration ?? 0;
+        return groups;
+      }
+
+      groups.push({
+        date: row.date,
+        sessions: [row],
+        dailyTotalMs: row.completedDuration ?? 0
+      });
+      return groups;
+    }, []);
 
     return (
-      <Modal title={`${user?.name ?? "Developer"} Login History`} onClose={onClose}>
-        {records.length === 0 ? (
-          <EmptyState title="No login or logout records found." />
-        ) : (
-          <Table headers={["Action", "Date", "Time"]}>
-            {records.map((record) => {
-              const dateTime = splitDateTime(record.dateTime);
-              return (
-                <tr key={record.id} className="hover:bg-neutral-50">
-                  <Cell>{record.action}</Cell>
-                  <Cell>{dateTime.date}</Cell>
-                  <Cell>{dateTime.time}</Cell>
-                </tr>
-              );
-            })}
-          </Table>
-        )}
+      <Modal title={`${user?.name ?? "Developer"} History`} onClose={onClose} showCloseButton={false}>
+        <div className="space-y-4">
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant={historyModalTab === "login" ? "primary" : "secondary"}
+              onClick={() => setHistoryModalTab("login")}
+            >
+              Login History
+            </Button>
+            <Button
+              variant={historyModalTab === "work" ? "primary" : "secondary"}
+              onClick={() => setHistoryModalTab("work")}
+            >
+              Work History
+            </Button>
+          </div>
+
+          <div className="max-h-[60vh] overflow-y-auto">
+            {historyModalTab === "login" ? (
+              records.length === 0 ? (
+                <EmptyState title="No login or logout records found." />
+              ) : (
+                <Table headers={["Action", "Date", "Time"]}>
+                  {records.map((record) => {
+                    const dateTime = splitDateTime(record.dateTime);
+                    return (
+                      <tr key={record.id} className="hover:bg-neutral-50">
+                        <Cell>{record.action}</Cell>
+                        <Cell>{dateTime.date}</Cell>
+                        <Cell>{dateTime.time}</Cell>
+                      </tr>
+                    );
+                  })}
+                </Table>
+              )
+            ) : developerWorkHistoryLoading ? (
+              <EmptyState title="Loading work history." />
+            ) : developerWorkHistoryError ? (
+              <EmptyState title={developerWorkHistoryError} />
+            ) : workSections.length === 0 ? (
+              <EmptyState title="No work sessions found." />
+            ) : (
+              <div className="space-y-4">
+                {workSections.map((section) => (
+                  <div key={section.date} className="space-y-2">
+                    <Table headers={["Date", "Clock In", "Clock Out", "Total Worked"]}>
+                      {section.sessions.map((session) => (
+                        <tr key={session.id} className="hover:bg-neutral-50">
+                          <Cell>{session.date}</Cell>
+                          <Cell>{session.clockIn}</Cell>
+                          <Cell>{session.clockOut}</Cell>
+                          <Cell>{session.totalWorked}</Cell>
+                        </tr>
+                      ))}
+                    </Table>
+                    <div className="text-sm font-medium text-neutral-700">
+                      Daily total: {formatWorkedDuration(section.dailyTotalMs)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="flex justify-end">
+            <Button variant="secondary" onClick={onClose}>
+              Close
+            </Button>
+          </div>
+        </div>
       </Modal>
     );
   }
@@ -1337,41 +1730,6 @@ export default function Home() {
     );
   }
 
-  function QrInstallPage() {
-    return (
-      <div className="mx-auto max-w-2xl">
-        <Card className="p-6 text-center">
-          <h2 className="text-xl font-semibold">Install Key Pillar Ai App</h2>
-          <div className="mx-auto my-6 grid h-56 w-56 grid-cols-5 gap-2 border border-black bg-white p-4">
-            {Array.from({ length: 25 }).map((_, index) => (
-              <div key={index} className={index % 2 === 0 || index % 7 === 0 ? "bg-black" : "bg-neutral-200"} />
-            ))}
-          </div>
-          <p className="break-all text-sm font-medium">https://app.keypillarai.com/install</p>
-          <p className="mt-3 text-sm text-neutral-600">
-            Scan this QR code from your mobile device to open and install the app.
-          </p>
-          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
-            <Button
-              onClick={() => {
-                navigator.clipboard?.writeText("https://app.keypillarai.com/install");
-                addAudit("App install link copied", "QR Install", "Key Pillar Ai App");
-              }}
-            >
-              Copy App Link
-            </Button>
-            <Button
-              variant="secondary"
-              onClick={() => addAudit("QR code download requested", "QR Install", "Key Pillar Ai App")}
-            >
-              Download QR Code
-            </Button>
-          </div>
-        </Card>
-      </div>
-    );
-  }
-
   function SettingsPage() {
     return (
       <div className="grid gap-6 xl:grid-cols-2">
@@ -1386,7 +1744,7 @@ export default function Home() {
         </Card>
         <Card>
           <SectionTitle title="Password Management Rules" />
-          <RuleList items={["Password-only login", "Developers cannot change passwords", "Admin can change passwords"]} />
+          <RuleList items={["Email and password login", "Developers cannot change passwords", "Admin can change passwords"]} />
         </Card>
         <Card>
           <SectionTitle title="Task Status Rules" />
@@ -1618,6 +1976,7 @@ export default function Home() {
       <Modal title={title} onClose={onClose} showCloseButton={false}>
         <form className="space-y-4" onSubmit={onSubmit}>
           <Input label="Developer name" name="name" defaultValue={user?.name} required />
+          <Input label="Email" name="email" type="email" defaultValue={user?.email} required />
           {!user && <PasswordInput label="Password" name="password" required />}
           <Select label="Role" name="role" defaultValue={user?.role ?? "Developer"}>
             <option>Developer</option>
@@ -1661,6 +2020,26 @@ function Cell({ children }: { children: React.ReactNode }) {
 
 function ActionGroup({ children }: { children: React.ReactNode }) {
   return <div className="flex min-w-48 flex-col gap-2 sm:flex-row sm:flex-wrap">{children}</div>;
+}
+
+function DashboardNavCard({
+  label,
+  value,
+  onClick
+}: {
+  label: string;
+  value: number | string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-md text-left transition hover:bg-neutral-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-black focus-visible:ring-offset-2"
+    >
+      <StatCard label={label} value={value} />
+    </button>
+  );
 }
 
 function SectionTitle({ title }: { title: string }) {

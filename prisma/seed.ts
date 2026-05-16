@@ -1,11 +1,22 @@
-import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import bcrypt from "bcrypt";
+import { config as loadEnv } from "dotenv";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { AccountStatus, CommentType, PrismaClient, ProjectStatus, Role, TaskStatus } from "@prisma/client";
 
-const prisma = new PrismaClient();
-
-function seedPasswordHash(password: string) {
-  return createHash("sha256").update(`seed:${password}`).digest("hex");
+for (const candidate of [".env.local", ".env"]) {
+  const path = resolve(process.cwd(), candidate);
+  if (existsSync(path)) {
+    loadEnv({ path, override: false });
+  }
 }
+
+const prisma = new PrismaClient({
+  adapter: new PrismaPg({
+    connectionString: process.env.DATABASE_URL ?? ""
+  })
+});
 
 function parseDate(date: string) {
   return new Date(date);
@@ -20,31 +31,39 @@ async function main() {
   await prisma.project.deleteMany();
   await prisma.user.deleteMany();
 
+  const [adminPasswordHash, developerPasswordHash] = await Promise.all([
+    bcrypt.hash("admin123", 10),
+    bcrypt.hash("dev123", 10)
+  ]);
+
   await prisma.user.createMany({
     data: [
       {
         id: "u-admin",
         name: "Admin",
+        email: "admin@keypillarai.local",
         role: Role.ADMIN,
-        passwordHash: seedPasswordHash("admin123"),
+        passwordHash: adminPasswordHash,
         accountStatus: AccountStatus.ACTIVE,
-        lastLoginAt: parseDate("9 May 2026, 9:00 AM")
+        lastLoginAt: parseDate("2026-05-09T09:00:00Z")
       },
       {
         id: "u-rahim",
         name: "Rahim",
+        email: "rahim@keypillarai.local",
         role: Role.DEVELOPER,
-        passwordHash: seedPasswordHash("dev123"),
+        passwordHash: developerPasswordHash,
         accountStatus: AccountStatus.ACTIVE,
-        lastLoginAt: parseDate("9 May 2026, 10:15 AM")
+        lastLoginAt: parseDate("2026-05-09T10:15:00Z")
       },
       {
         id: "u-karim",
         name: "Karim",
+        email: "karim@keypillarai.local",
         role: Role.DEVELOPER,
-        passwordHash: seedPasswordHash("dev123"),
+        passwordHash: developerPasswordHash,
         accountStatus: AccountStatus.ACTIVE,
-        lastLoginAt: parseDate("8 May 2026, 4:30 PM")
+        lastLoginAt: parseDate("2026-05-08T16:30:00Z")
       }
     ]
   });

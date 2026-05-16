@@ -14,11 +14,20 @@ export type ProjectAttachment = {
   url: string;
 };
 
+export type ClockSession = {
+  id: string;
+  userId: string;
+  clockInAt: string;
+  clockOutAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type User = {
   id: string;
   name: string;
+  email: string;
   role: Role;
-  password: string;
   accountStatus: "Active" | "Inactive";
   lastLogin: string;
 };
