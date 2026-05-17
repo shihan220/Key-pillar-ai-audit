@@ -2,8 +2,13 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Key Pillar Ai Audit Log & Task Tracking App",
-  description: "Internal audit log and task tracking frontend prototype"
+  title: "Keypillar AI",
+  description: "Internal audit log and task tracking frontend prototype",
+  icons: {
+    icon: "/brand/keypillar-ai-logo.jpeg",
+    shortcut: "/brand/keypillar-ai-logo.jpeg",
+    apple: "/brand/keypillar-ai-logo.jpeg"
+  }
 };
 
 export default function RootLayout({

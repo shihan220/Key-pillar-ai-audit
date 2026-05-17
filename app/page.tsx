@@ -707,10 +707,12 @@ export default function Home() {
       <main className="flex min-h-screen items-center justify-center bg-white p-4">
         <Card className="w-full max-w-md p-6">
           <div className="mb-8 text-center">
-            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-md border border-black text-sm font-semibold">
-              KP
-            </div>
-            <p className="text-sm font-semibold text-black">Key Pillar Ai</p>
+            <img
+              src="/brand/keypillar-ai-logo.jpeg"
+              alt="Keypillar AI logo"
+              className="mx-auto mb-4 h-14 w-auto object-contain"
+            />
+            <p className="text-sm font-semibold text-black">Keypillar AI</p>
             <h1 className="mt-2 text-2xl font-semibold text-black">Audit Log & Task Tracking</h1>
             <p className="mt-2 text-sm text-neutral-600">Internal access only</p>
           </div>
@@ -734,6 +736,9 @@ export default function Home() {
   }
 
   const authUser = currentUser;
+  const isDashboardPage = page === "admin-dashboard" || page === "developer-dashboard";
+  const notificationBadgeText =
+    notificationUnreadCount > 99 ? "99+" : notificationUnreadCount > 0 ? String(notificationUnreadCount) : "";
 
   const navItems =
     authUser.role === "Admin"
@@ -762,8 +767,17 @@ export default function Home() {
         }`}
       >
         <div className="mb-8">
-          <div className="text-lg font-semibold">Key Pillar Ai</div>
-          <div className="text-sm text-neutral-600">Audit Log & Task Tracking</div>
+          <div className="flex items-center gap-3">
+            <img
+              src="/brand/keypillar-ai-logo.jpeg"
+              alt="Keypillar AI logo"
+              className="h-10 w-10 rounded-md object-cover"
+            />
+            <div>
+              <div className="text-lg font-semibold">Keypillar AI</div>
+              <div className="text-sm text-neutral-600">Audit Log & Task Tracking</div>
+            </div>
+          </div>
         </div>
         <nav className="space-y-2">
           {navItems.map(([key, label]) => (
@@ -911,6 +925,31 @@ export default function Home() {
           onSubmit={(event) => changePassword(event, modal.userId)}
           onClose={() => setModal(null)}
         />
+      )}
+      {selectedNotification && (
+        <Modal title="Notification" onClose={() => setSelectedNotification(null)} showCloseButton={false}>
+          <div className="space-y-6">
+            <div className="space-y-3">
+              <div>
+                <div className="text-lg font-semibold text-black">{selectedNotification.title}</div>
+                <div className="mt-2 text-sm text-neutral-700">{selectedNotification.message}</div>
+              </div>
+              <div className="text-sm text-neutral-600">
+                <div>Type: {selectedNotification.entityType}</div>
+                <div className="mt-1">{formatNotificationDateTime(selectedNotification.createdAt)}</div>
+              </div>
+            </div>
+            <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
+              {selectedNotification.entityId &&
+                (selectedNotification.entityType === "Task" || selectedNotification.entityType === "Project") && (
+                  <Button variant="secondary" onClick={() => viewNotificationTarget(selectedNotification)}>
+                    {selectedNotification.entityType === "Task" ? "View Task" : "View Project"}
+                  </Button>
+                )}
+              <Button onClick={() => setSelectedNotification(null)}>Close</Button>
+            </div>
+          </div>
+        </Modal>
       )}
       {deleteTaskId && (
         <ConfirmDialog
@@ -1927,7 +1966,7 @@ export default function Home() {
               )}
             </>
           )}
-          <Input label="Due date" name="dueDate" type="text" defaultValue={task?.dueDate} placeholder="15 May 2026" required />
+          <DatePickerField label="Due date" name="dueDate" defaultValue={task?.dueDate} required />
           {!task && <p className="text-sm text-neutral-600">Initial status will be Pending.</p>}
           <FormActions onCancel={onClose} />
         </form>
