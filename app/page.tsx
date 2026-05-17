@@ -31,13 +31,13 @@ import {
   deleteProject as apiDeleteProject,
   deleteTask as apiDeleteTask,
   fetchAppState,
-  fetchNotifications,
+  fetchNotifications as apiFetchNotifications,
   fetchNotificationUnreadCount,
   fetchUserClockHistory,
   getStoredUser,
   login as apiLogin,
-  markNotificationAsRead as apiMarkNotificationAsRead,
   logout as apiLogout,
+  markNotificationAsRead as apiMarkNotificationAsRead,
   reassignTask as apiReassignTask,
   removeFailedStatus as apiRemoveFailedStatus,
   storeAuthSession,
@@ -45,7 +45,19 @@ import {
   updateTask as apiUpdateTask,
   updateUser as apiUpdateUser
 } from "@/lib/api";
-import { AuditLog, ClockSession, Comment, HistoryItem, Notification, Project, ProjectStatus, Role, Status, Task, User } from "@/lib/types";
+import {
+  AuditLog,
+  ClockSession,
+  Comment,
+  HistoryItem,
+  Notification,
+  Project,
+  ProjectStatus,
+  Role,
+  Status,
+  Task,
+  User
+} from "@/lib/types";
 
 type Page =
   | "admin-dashboard"
@@ -337,6 +349,56 @@ function DatePickerField({
   );
 }
 
+function readDashboardRouteState() {
+  if (typeof window === "undefined") return null;
+
+  const url = new URL(window.location.href);
+  const section = url.searchParams.get("section");
+  const status = url.searchParams.get("status");
+
+  const projectFilter: AdminProjectDashboardFilter =
+    status === "active" ? "active" : status === "completed" ? "completed" : "all";
+
+  const taskFilter: AdminTaskDashboardFilter =
+    status === "pending"
+      ? "pending"
+      : status === "in-progress"
+        ? "in-progress"
+        : status === "failed"
+          ? "failed"
+          : status === "waiting-for-approval"
+            ? "waiting-for-approval"
+            : status === "complete"
+              ? "complete"
+              : "all";
+
+  if (section === "projects") {
+    return {
+      page: "projects" as Page,
+      projectFilter,
+      taskFilter: "all" as AdminTaskDashboardFilter
+    };
+  }
+
+  if (section === "tasks") {
+    return {
+      page: "tasks" as Page,
+      projectFilter: "all" as AdminProjectDashboardFilter,
+      taskFilter
+    };
+  }
+
+  if (section === "developers") {
+    return {
+      page: "developers" as Page,
+      projectFilter: "all" as AdminProjectDashboardFilter,
+      taskFilter: "all" as AdminTaskDashboardFilter
+    };
+  }
+
+  return null;
+}
+
 export default function Home() {
   const [users, setUsers] = useState<User[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -346,10 +408,7 @@ export default function Home() {
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
-  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [selectedNotification, setSelectedNotification] = useState<Notification | null>(null);
-  const [notificationError, setNotificationError] = useState("");
-  const [notificationLoading, setNotificationLoading] = useState(false);
   const [activeClockSession, setActiveClockSession] = useState<ClockSession | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [page, setPage] = useState<Page>("admin-dashboard");
@@ -405,10 +464,7 @@ export default function Home() {
     setAuditLogs([]);
     setNotifications([]);
     setNotificationUnreadCount(0);
-    setNotificationsOpen(false);
     setSelectedNotification(null);
-    setNotificationError("");
-    setNotificationLoading(false);
     setActiveClockSession(null);
     setSelectedTaskId("");
     setSelectedProjectId("");
@@ -453,29 +509,9 @@ export default function Home() {
       const data = await fetchAppState();
       applyAppState(data, preserveUserId);
       setSessionError("");
-      if (preserveUserId) {
-        void refreshNotifications();
-      }
       return data;
     } finally {
       setIsAppLoading(false);
-    }
-  };
-
-  const refreshNotifications = async () => {
-    setNotificationLoading(true);
-    try {
-      const [notificationsResponse, unreadCountResponse] = await Promise.all([
-        fetchNotifications(),
-        fetchNotificationUnreadCount()
-      ]);
-      setNotifications(notificationsResponse.notifications);
-      setNotificationUnreadCount(unreadCountResponse.count);
-      setNotificationError("");
-    } catch (error) {
-      setNotificationError(error instanceof Error ? error.message : "Unable to load notifications.");
-    } finally {
-      setNotificationLoading(false);
     }
   };
 
@@ -521,18 +557,28 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (!currentUser || currentUser.role !== "Admin") return;
+
+    const applyRouteState = () => {
+      const routeState = readDashboardRouteState();
+      if (!routeState) return;
+      setAdminProjectDashboardFilter(routeState.projectFilter);
+      setAdminTaskDashboardFilter(routeState.taskFilter);
+      setPage(routeState.page);
+    };
+
+    applyRouteState();
+    window.addEventListener("popstate", applyRouteState);
+    return () => window.removeEventListener("popstate", applyRouteState);
+  }, [currentUser]);
+
+  useEffect(() => {
     if (!activeClockSession) return;
     const intervalId = window.setInterval(() => {
       setClockTick(Date.now());
     }, 1000);
     return () => window.clearInterval(intervalId);
   }, [activeClockSession]);
-
-  useEffect(() => {
-    if (page !== "admin-dashboard" && page !== "developer-dashboard") {
-      setNotificationsOpen(false);
-    }
-  }, [page]);
 
   useEffect(() => {
     if (!loginHistoryUserId || currentUser?.role !== "Admin") return;
@@ -551,6 +597,31 @@ export default function Home() {
         setDeveloperWorkHistoryLoading(false);
       });
   }, [currentUser?.role, loginHistoryUserId]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setNotifications([]);
+      setNotificationUnreadCount(0);
+      setSelectedNotification(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    void Promise.all([apiFetchNotifications(), fetchNotificationUnreadCount()])
+      .then(([notificationResponse, unreadCountResponse]) => {
+        if (cancelled) return;
+        setNotifications(notificationResponse.notifications);
+        setNotificationUnreadCount(unreadCountResponse.count);
+      })
+      .catch((error) => {
+        console.error(error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser]);
 
   const projectTaskCounts = (projectId: string) => {
     const projectTasks = activeTasks.filter((task) => task.projectId === projectId);
@@ -602,45 +673,6 @@ export default function Home() {
       setCurrentUser(null);
       setMobileOpen(false);
       setPage("admin-dashboard");
-    }
-  };
-
-  const markNotificationAsRead = async (notificationId: string) => {
-    try {
-      await apiMarkNotificationAsRead(notificationId);
-      setNotifications((current) =>
-        current.map((notification) =>
-          notification.id === notificationId ? { ...notification, isRead: true } : notification
-        )
-      );
-      setNotificationUnreadCount((current) => Math.max(0, current - 1));
-    } catch (error) {
-      showActionError(error, "Unable to mark notification as read.");
-    }
-  };
-
-  const openNotification = async (notification: Notification) => {
-    setSelectedNotification(notification);
-    setNotificationsOpen(false);
-    if (notification.isRead) {
-      return;
-    }
-
-    await markNotificationAsRead(notification.id);
-    setSelectedNotification((current) => (current?.id === notification.id ? { ...current, isRead: true } : current));
-  };
-
-  const viewNotificationTarget = (notification: Notification) => {
-    if (notification.entityType === "Task" && notification.entityId) {
-      setSelectedNotification(null);
-      openTaskDetails(notification.entityId);
-      return;
-    }
-
-    if (notification.entityType === "Project" && notification.entityId) {
-      setSelectedNotification(null);
-      setSelectedProjectId(notification.entityId);
-      navigate("projects");
     }
   };
 
@@ -954,6 +986,50 @@ export default function Home() {
       (log) => log.user === userName && (log.action === "User logged in" || log.action === "User logged out")
     );
 
+  const viewNotificationTarget = (notification: Notification) => {
+    if (!notification.entityId) {
+      setSelectedNotification(null);
+      return;
+    }
+
+    if (notification.entityType === "Task") {
+      setSelectedNotification(null);
+      openTaskDetails(notification.entityId);
+      return;
+    }
+
+    if (notification.entityType === "Project" && currentUser?.role === "Admin") {
+      setSelectedNotification(null);
+      setSelectedProjectId(notification.entityId);
+      navigate("projects");
+      return;
+    }
+
+    setSelectedNotification(null);
+  };
+
+  const openNotification = async (notification: Notification) => {
+    const nextNotification = notification.isRead ? notification : { ...notification, isRead: true };
+    setSelectedNotification(nextNotification);
+
+    if (notification.isRead) return;
+
+    setNotifications((current) =>
+      current.map((item) => (item.id === notification.id ? { ...item, isRead: true } : item))
+    );
+    setNotificationUnreadCount((current) => Math.max(0, current - 1));
+
+    try {
+      await apiMarkNotificationAsRead(notification.id);
+    } catch (error) {
+      setNotifications((current) =>
+        current.map((item) => (item.id === notification.id ? notification : item))
+      );
+      setNotificationUnreadCount((current) => current + 1);
+      showActionError(error, "Failed to update notification.");
+    }
+  };
+
   if (isRestoringSession) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-white p-4">
@@ -988,11 +1064,6 @@ export default function Home() {
               Login
             </Button>
           </form>
-          <div className="mt-4 text-xs text-neutral-600">
-            Admin: admin@keypillarai.local / admin123
-            <br />
-            Developers: rahim@keypillarai.local or karim@keypillarai.local / dev123
-          </div>
         </Card>
       </main>
     );
@@ -1000,8 +1071,6 @@ export default function Home() {
 
   const authUser = currentUser;
   const isDashboardPage = page === "admin-dashboard" || page === "developer-dashboard";
-  const notificationBadgeText =
-    notificationUnreadCount > 99 ? "99+" : notificationUnreadCount > 0 ? String(notificationUnreadCount) : "";
 
   const navItems =
     authUser.role === "Admin"
@@ -1080,64 +1149,6 @@ export default function Home() {
             <h1 className="truncate text-lg font-semibold sm:text-xl">{pageTitle}</h1>
           </div>
           <div className="flex items-center gap-3">
-            {isDashboardPage && (
-              <div className="relative">
-                <button
-                  type="button"
-                  aria-label="Notifications"
-                  onClick={() => setNotificationsOpen((value) => !value)}
-                  className="relative inline-flex h-10 w-10 items-center justify-center rounded-md border border-neutral-300 bg-white text-black hover:bg-neutral-100"
-                >
-                  <svg viewBox="0 0 24 24" aria-hidden="true" className="h-5 w-5 fill-none stroke-current stroke-2">
-                    <path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2a2 2 0 0 1-.6 1.4L4 17h5" />
-                    <path d="M10 21a2 2 0 0 0 4 0" />
-                  </svg>
-                  {notificationBadgeText && (
-                    <span className="absolute -right-1 -top-1 inline-flex min-h-5 min-w-5 items-center justify-center rounded-full bg-black px-1.5 text-[10px] font-semibold text-white">
-                      {notificationBadgeText}
-                    </span>
-                  )}
-                </button>
-                {notificationsOpen && (
-                  <div className="absolute right-0 top-12 z-30 w-80 rounded-md border border-neutral-200 bg-white p-3 shadow-sm">
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                      <div className="text-sm font-semibold text-black">Notifications</div>
-                      <div className="text-xs text-neutral-500">{notificationUnreadCount} unread</div>
-                    </div>
-                    {notificationLoading ? (
-                      <div className="py-4 text-sm text-neutral-600">Loading notifications.</div>
-                    ) : notificationError ? (
-                      <div className="py-4 text-sm text-neutral-600">{notificationError}</div>
-                    ) : notifications.length === 0 ? (
-                      <div className="py-4 text-sm text-neutral-600">No notifications.</div>
-                    ) : (
-                      <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
-                        {notifications.map((notification) => (
-                          <button
-                            key={notification.id}
-                            type="button"
-                            onClick={() => void openNotification(notification)}
-                            className={`block w-full rounded-md border p-3 text-left text-sm hover:bg-neutral-50 ${
-                              notification.isRead ? "border-neutral-200 bg-white" : "border-black bg-neutral-50"
-                            }`}
-                          >
-                            <div className="min-w-0">
-                              <div className={`text-black ${notification.isRead ? "font-medium" : "font-semibold"}`}>
-                                {notification.title}
-                              </div>
-                              <div className="mt-1 line-clamp-2 text-neutral-600">{notification.message}</div>
-                              <div className="mt-2 text-xs text-neutral-500">
-                                {notification.entityType} · {formatNotificationDateTime(notification.createdAt)}
-                              </div>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
             {authUser.role === "Developer" && (
               activeClockSession ? (
                 <div className="text-right text-sm">
@@ -1359,16 +1370,16 @@ export default function Home() {
     return (
       <div className="space-y-6">
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          <DashboardNavCard label="Total Projects" value={counts.totalProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "all", path: "/projects" })} />
-          <DashboardNavCard label="Active Projects" value={counts.activeProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "active", path: "/projects?status=active" })} />
-          <DashboardNavCard label="Completed Projects" value={counts.completedProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "completed", path: "/projects?status=completed" })} />
-          <DashboardNavCard label="Total Tasks" value={counts.totalTasks} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "all", path: "/tasks" })} />
-          <DashboardNavCard label="Pending Tasks" value={counts.pending} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "pending", path: "/tasks?status=pending" })} />
-          <DashboardNavCard label="In Progress Tasks" value={counts.progress} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "in-progress", path: "/tasks?status=in-progress" })} />
-          <DashboardNavCard label="Failed Tasks" value={counts.failed} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "failed", path: "/tasks?status=failed" })} />
-          <DashboardNavCard label="Waiting for Approval Tasks" value={counts.waiting} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "waiting-for-approval", path: "/tasks?status=waiting-for-approval" })} />
-          <DashboardNavCard label="Completed Tasks" value={counts.complete} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "complete", path: "/tasks?status=complete" })} />
-          <DashboardNavCard label="Total Developers" value={counts.developers} onClick={() => openAdminDashboardTarget("developers", { path: "/developers" })} />
+          <DashboardNavCard label="Total Projects" value={counts.totalProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "all", path: "/?section=projects" })} />
+          <DashboardNavCard label="Active Projects" value={counts.activeProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "active", path: "/?section=projects&status=active" })} />
+          <DashboardNavCard label="Completed Projects" value={counts.completedProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "completed", path: "/?section=projects&status=completed" })} />
+          <DashboardNavCard label="Total Tasks" value={counts.totalTasks} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "all", path: "/?section=tasks" })} />
+          <DashboardNavCard label="Pending Tasks" value={counts.pending} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "pending", path: "/?section=tasks&status=pending" })} />
+          <DashboardNavCard label="In Progress Tasks" value={counts.progress} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "in-progress", path: "/?section=tasks&status=in-progress" })} />
+          <DashboardNavCard label="Failed Tasks" value={counts.failed} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "failed", path: "/?section=tasks&status=failed" })} />
+          <DashboardNavCard label="Waiting for Approval Tasks" value={counts.waiting} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "waiting-for-approval", path: "/?section=tasks&status=waiting-for-approval" })} />
+          <DashboardNavCard label="Completed Tasks" value={counts.complete} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "complete", path: "/?section=tasks&status=complete" })} />
+          <DashboardNavCard label="Total Developers" value={counts.developers} onClick={() => openAdminDashboardTarget("developers", { path: "/?section=developers" })} />
         </div>
 
         <Card>

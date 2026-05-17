@@ -13,8 +13,6 @@ import {
   TaskStatus,
   User,
 } from '@prisma/client';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
 import {
   FrontendAuditLog,
   FrontendClockSession,
@@ -155,41 +153,18 @@ export function mapUser(user: User): FrontendUser {
   };
 }
 
-function mapProjectAttachment(attachment?: ProjectAttachment) {
-  if (!attachment) return undefined;
-
-  if (attachment.storageUrl.startsWith('data:')) {
-    return {
-      name: attachment.fileName,
-      url: attachment.storageUrl,
-    };
-  }
-
-  try {
-    const parsed = new URL(attachment.storageUrl);
-    if (parsed.pathname.startsWith('/uploads/')) {
-      const localPath = resolve(process.cwd(), `.${parsed.pathname}`);
-      if (!existsSync(localPath)) {
-        return undefined;
-      }
-    }
-  } catch {
-    // Keep non-URL values as-is.
-  }
-
-  return {
-    name: attachment.fileName,
-    url: attachment.storageUrl,
-  };
-}
-
 export function mapProject(project: Project & { attachments: ProjectAttachment[] }): FrontendProject {
   const attachment = project.attachments[0];
   return {
     id: project.id,
     name: project.name,
     description: project.description,
-    attachment: mapProjectAttachment(attachment),
+    attachment: attachment
+      ? {
+          name: attachment.fileName,
+          url: attachment.storageUrl,
+        }
+      : undefined,
     status: projectStatusToFrontend(project.status),
     createdDate: formatDate(project.createdAt),
     archived: Boolean(project.archivedAt) || project.status === ProjectStatus.ARCHIVED,

@@ -1,7 +1,7 @@
 import bcrypt from 'bcrypt';
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { AccountStatus } from '@prisma/client';
-import type { AuthenticatedUser } from '../auth/auth-user';
+import { AuthenticatedUser } from '../auth/auth-user';
 import { accountStatusFromFrontend, roleFromFrontend } from '../common/frontend-mappers';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChangePasswordDto, CreateUserDto, UpdateUserDto } from './dto/user.dto';

@@ -149,10 +149,6 @@ export function fetchClockHistory() {
   return request<{ sessions: ClockSession[] }>("/clock-sessions/history");
 }
 
-export function fetchUserClockHistory(userId: string) {
-  return request<{ sessions: ClockSession[] }>(`/clock-sessions/user/${userId}/history`);
-}
-
 export function fetchNotifications() {
   return request<{ notifications: Notification[] }>("/notifications");
 }
@@ -163,6 +159,10 @@ export function fetchNotificationUnreadCount() {
 
 export function markNotificationAsRead(notificationId: string) {
   return request<{ success: boolean }>(`/notifications/${notificationId}/read`, "POST");
+}
+
+export function fetchUserClockHistory(userId: string) {
+  return request<{ sessions: ClockSession[] }>(`/clock-sessions/user/${userId}/history`);
 }
 
 export function createProject(body: FormData) {

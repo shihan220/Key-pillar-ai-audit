@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
 import { Role } from '@prisma/client';
-import type { AuthenticatedUser } from '../auth/auth-user';
+import { AuthenticatedUser } from '../auth/auth-user';
 import { mapClockSession } from '../common/frontend-mappers';
 import { PrismaService } from '../prisma/prisma.service';
 

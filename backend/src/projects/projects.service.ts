@@ -3,9 +3,8 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ProjectStatus } from '@prisma/client';
-import type { AuthenticatedUser } from '../auth/auth-user';
+import { AuthenticatedUser } from '../auth/auth-user';
 import { projectStatusFromFrontend } from '../common/frontend-mappers';
-import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProjectDto, UpdateProjectDto } from './dto/project.dto';
 
@@ -17,10 +16,7 @@ type UploadedAttachment = {
 
 @Injectable()
 export class ProjectsService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly notificationsService: NotificationsService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   async createProject(user: AuthenticatedUser, body: CreateProjectDto, file: UploadedAttachment | undefined, publicOrigin: string) {
     this.requireAdmin(user);
@@ -57,14 +53,6 @@ export class ProjectsService {
         entityName: project.name,
       },
     });
-
-    await this.notificationsService.notifyAdmins(
-      'Project created',
-      'Project',
-      project.id,
-      'Project created',
-      `New project created: ${project.name}.`,
-    );
 
     return { success: true, id: project.id };
   }
@@ -137,24 +125,6 @@ export class ProjectsService {
       });
     });
 
-    const stakeholderIds = await this.projectStakeholderIds(projectId);
-
-    await this.notificationsService.notifyAdmins(
-      'Project updated',
-      'Project',
-      project.id,
-      'Project updated',
-      `Project updated: ${body.name ?? project.name}.`,
-    );
-    await this.notificationsService.notifyUsers({
-      userIds: stakeholderIds,
-      action: 'Project updated',
-      entityType: 'Project',
-      entityId: project.id,
-      title: 'Project updated',
-      message: `Project updated: ${body.name ?? project.name}.`,
-    });
-
     return { success: true };
   }
 
@@ -166,7 +136,6 @@ export class ProjectsService {
       throw new NotFoundException('Project not found.');
     }
 
-    const stakeholderIds = await this.projectStakeholderIds(projectId);
     const now = new Date();
     await this.prisma.$transaction(async (tx) => {
       await tx.project.update({
@@ -190,22 +159,6 @@ export class ProjectsService {
           newValue: 'Deleted',
         },
       });
-    });
-
-    await this.notificationsService.notifyAdmins(
-      'Project deleted',
-      'Project',
-      project.id,
-      'Project deleted',
-      `Project deleted: ${project.name}.`,
-    );
-    await this.notificationsService.notifyUsers({
-      userIds: stakeholderIds,
-      action: 'Project deleted',
-      entityType: 'Project',
-      entityId: project.id,
-      title: 'Project deleted',
-      message: `Project deleted: ${project.name}.`,
     });
 
     return { success: true };
@@ -236,19 +189,5 @@ export class ProjectsService {
       url: `${publicOrigin}/uploads/project-documents/${storedName}`,
       mimeType: file.mimetype,
     };
-  }
-
-  private async projectStakeholderIds(projectId: string) {
-    const taskOwners = await this.prisma.task.findMany({
-      where: {
-        projectId,
-        deletedAt: null,
-      },
-      select: {
-        assignedDeveloperId: true,
-      },
-    });
-
-    return Array.from(new Set(taskOwners.map((item) => item.assignedDeveloperId)));
   }
 }

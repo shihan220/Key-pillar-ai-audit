@@ -1,17 +1,13 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { CommentType, Prisma, Task, TaskStatus } from '@prisma/client';
-import type { AuthenticatedUser } from '../auth/auth-user';
+import { AuthenticatedUser } from '../auth/auth-user';
 import { commentTypeFromFrontend, parseDateInput, taskStatusFromFrontend } from '../common/frontend-mappers';
-import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddCommentDto, ChangeTaskStatusDto, CreateTaskDto, ReassignTaskDto, UpdateTaskDto } from './dto/task.dto';
 
 @Injectable()
 export class TasksService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly notificationsService: NotificationsService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   async createTask(user: AuthenticatedUser, body: CreateTaskDto) {
     this.requireAdmin(user);
@@ -59,22 +55,6 @@ export class TasksService {
       }),
     ]);
 
-    await this.notificationsService.notifyAdmins(
-      'Task created',
-      'Task',
-      task.id,
-      'Task created',
-      `New task created: ${task.title}.`,
-    );
-    await this.notificationsService.notifyUsers({
-      userIds: [body.developerId],
-      action: 'Task created',
-      entityType: 'Task',
-      entityId: task.id,
-      title: 'New task assigned',
-      message: `You have been assigned a new task: ${task.title}.`,
-    });
-
     return { success: true, id: task.id };
   }
 
@@ -112,24 +92,6 @@ export class TasksService {
     }
 
     await this.recordTaskEvent(task, user, 'Task edited', task.title, body.title ?? task.title);
-    const nextTitle = body.title ?? task.title;
-    await this.notificationsService.notifyAdmins(
-      'Task updated',
-      'Task',
-      task.id,
-      'Task updated',
-      user.role === 'ADMIN' ? `Task updated: ${nextTitle}.` : `${user.name} updated a task: ${nextTitle}.`,
-    );
-    if (user.role === 'ADMIN') {
-      await this.notificationsService.notifyUsers({
-        userIds: [body.developerId ?? task.assignedDeveloperId],
-        action: 'Task updated',
-        entityType: 'Task',
-        entityId: task.id,
-        title: 'Task updated',
-        message: `Your task details have been updated: ${nextTitle}.`,
-      });
-    }
     return { success: true };
   }
 
@@ -143,21 +105,6 @@ export class TasksService {
     });
 
     await this.recordTaskEvent(task, user, 'Task reassigned', task.assignedDeveloperId, body.developerId);
-    await this.notificationsService.notifyAdmins(
-      'Task reassigned',
-      'Task',
-      task.id,
-      'Task reassigned',
-      `Task reassigned successfully: ${task.title}.`,
-    );
-    await this.notificationsService.notifyUsers({
-      userIds: [body.developerId],
-      action: 'Task reassigned',
-      entityType: 'Task',
-      entityId: task.id,
-      title: 'Task reassigned',
-      message: `A task has been reassigned to you: ${task.title}.`,
-    });
     return { success: true };
   }
 
@@ -180,21 +127,6 @@ export class TasksService {
     });
 
     await this.recordTaskEvent(task, user, 'Task approved', 'Waiting for Approval', 'Complete');
-    await this.notificationsService.notifyAdmins(
-      'Admin approval action',
-      'Task',
-      task.id,
-      'Task approved',
-      `Task approved: ${task.title}.`,
-    );
-    await this.notificationsService.notifyUsers({
-      userIds: [task.assignedDeveloperId],
-      action: 'Task approved',
-      entityType: 'Task',
-      entityId: task.id,
-      title: 'Task approved',
-      message: `Admin has approved your task: ${task.title}.`,
-    });
     return { success: true };
   }
 
@@ -206,21 +138,6 @@ export class TasksService {
       data: { deletedAt: new Date() },
     });
     await this.recordTaskEvent(task, user, 'Task deleted', task.status, 'Deleted');
-    await this.notificationsService.notifyAdmins(
-      'Task deleted',
-      'Task',
-      task.id,
-      'Task deleted',
-      `Task deleted: ${task.title}.`,
-    );
-    await this.notificationsService.notifyUsers({
-      userIds: [task.assignedDeveloperId],
-      action: 'Task deleted',
-      entityType: 'Task',
-      entityId: task.id,
-      title: 'Task deleted',
-      message: `A task assigned to you was deleted: ${task.title}.`,
-    });
     return { success: true };
   }
 
@@ -254,55 +171,6 @@ export class TasksService {
     });
 
     await this.recordTaskEvent(task, user, 'Task status changed', this.frontStatus(task.status), this.frontStatus(nextStatus));
-    if (nextStatus === TaskStatus.WAITING_FOR_APPROVAL) {
-      await this.notificationsService.notifyAdmins(
-        'Task waiting for approval',
-        'Task',
-        task.id,
-        'Task sent for approval',
-        `${user.name} has submitted a task for approval: ${task.title}.`,
-      );
-      await this.notificationsService.notifyUsers({
-        userIds: [task.assignedDeveloperId],
-        action: 'Task waiting for approval',
-        entityType: 'Task',
-        entityId: task.id,
-        title: 'Task sent for approval',
-        message: `Your task has been sent for approval: ${task.title}.`,
-      });
-    } else if (nextStatus === TaskStatus.FAILED) {
-      await this.notificationsService.notifyAdmins(
-        'Failed task update',
-        'Task',
-        task.id,
-        'Task failed',
-        `Task marked as failed: ${task.title}.`,
-      );
-      await this.notificationsService.notifyUsers({
-        userIds: [task.assignedDeveloperId],
-        action: 'Failed task update',
-        entityType: 'Task',
-        entityId: task.id,
-        title: 'Task failed',
-        message: `Your task has been marked as failed: ${task.title}.`,
-      });
-    } else {
-      await this.notificationsService.notifyAdmins(
-        'Task status changed',
-        'Task',
-        task.id,
-        'Task status updated',
-        `${user.name} updated the task status: ${task.title}.`,
-      );
-      await this.notificationsService.notifyUsers({
-        userIds: [task.assignedDeveloperId],
-        action: 'Task status changed',
-        entityType: 'Task',
-        entityId: task.id,
-        title: 'Task status updated',
-        message: `Your task status has been updated: ${task.title}.`,
-      });
-    }
     return { success: true };
   }
 
@@ -321,13 +189,6 @@ export class TasksService {
     });
 
     await this.recordTaskEvent(task, user, 'Failed status removed', 'Failed', 'In Progress');
-    await this.notificationsService.notifyAdmins(
-      'Failed task update',
-      'Task',
-      task.id,
-      'Failed status removed',
-      `${user.name} resumed work on: ${task.title}.`,
-    );
     return { success: true };
   }
 
