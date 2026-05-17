@@ -57,7 +57,7 @@ Before starting locally, make sure you have:
 
 ```bash
 git clone <your-repository-url>
-cd "Key Pillar Task APP"
+cd <repository-folder-name>
 ```
 
 ### 2. Install dependencies
@@ -79,12 +79,18 @@ Update `.env.local` with your local PostgreSQL user and any other local values y
 Example:
 
 ```env
-DATABASE_URL="postgresql://<local-postgres-user>@localhost:5432/key_pillar_ai?schema=public"
+DATABASE_URL="postgresql://<local-postgres-user>:<local-postgres-password>@localhost:5432/key_pillar_ai?schema=public"
 BACKEND_HOST="0.0.0.0"
 BACKEND_PORT="4000"
 NEXT_PUBLIC_API_BASE_URL="http://localhost:4000"
 FRONTEND_ORIGIN="http://localhost:3000"
 JWT_SECRET="replace-with-a-local-development-secret"
+```
+
+Example with sample local values:
+
+```env
+DATABASE_URL="postgresql://admin:password123@localhost:5432/key_pillar_ai?schema=public"
 ```
 
 ### 4. Start PostgreSQL with Docker
@@ -114,13 +120,21 @@ npx prisma generate
 npx prisma migrate dev
 ```
 
-### 7. Start the backend
+### 7. Seed the database
+
+```bash
+npm run prisma:seed
+```
+
+This creates the initial local data required to use the app.
+
+### 8. Start the backend
 
 ```bash
 npm run backend:dev
 ```
 
-### 8. Start the frontend
+### 9. Start the frontend
 
 In a separate terminal:
 
