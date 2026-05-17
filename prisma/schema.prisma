@@ -57,6 +57,7 @@ model User {
   taskHistoryEntries         TaskHistory[]       @relation("TaskHistoryActor")
   auditLogs                  AuditLog[]          @relation("AuditLogActor")
   clockSessions              ClockSession[]
+  notifications              Notification[]
 
   @@map("users")
 }
@@ -200,4 +201,23 @@ model ClockSession {
   @@index([userId, clockOutAt])
   @@index([userId, createdAt])
   @@map("clock_sessions")
+}
+
+model Notification {
+  id         String   @id @default(cuid())
+  userId     String   @map("user_id")
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String?  @map("entity_id")
+  title      String
+  message    String
+  isRead     Boolean  @default(false) @map("is_read")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead, createdAt])
+  @@index([entityType, entityId])
+  @@map("notifications")
 }

@@ -3,7 +3,7 @@ import { Role } from '@prisma/client';
 import { mapAudit, mapClockSession, mapComment, mapHistory, mapProject, mapTask, mapUser } from '../common/frontend-mappers';
 import { FrontendAppState } from '../common/frontend-types';
 import { PrismaService } from '../prisma/prisma.service';
-import { AuthenticatedUser } from '../auth/auth-user';
+import type { AuthenticatedUser } from '../auth/auth-user';
 
 @Injectable()
 export class AppStateService {

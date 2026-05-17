@@ -31,9 +31,12 @@ import {
   deleteProject as apiDeleteProject,
   deleteTask as apiDeleteTask,
   fetchAppState,
+  fetchNotifications,
+  fetchNotificationUnreadCount,
   fetchUserClockHistory,
   getStoredUser,
   login as apiLogin,
+  markNotificationAsRead as apiMarkNotificationAsRead,
   logout as apiLogout,
   reassignTask as apiReassignTask,
   removeFailedStatus as apiRemoveFailedStatus,
@@ -42,7 +45,7 @@ import {
   updateTask as apiUpdateTask,
   updateUser as apiUpdateUser
 } from "@/lib/api";
-import { AuditLog, ClockSession, Comment, HistoryItem, Project, ProjectStatus, Role, Status, Task, User } from "@/lib/types";
+import { AuditLog, ClockSession, Comment, HistoryItem, Notification, Project, ProjectStatus, Role, Status, Task, User } from "@/lib/types";
 
 type Page =
   | "admin-dashboard"
@@ -151,6 +154,189 @@ function formatWorkTime(value: string) {
     .toUpperCase();
 }
 
+function formatNotificationDateTime(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true
+  })
+    .format(parsed)
+    .toUpperCase();
+}
+
+function normalizeDate(value: Date) {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+}
+
+function formatCalendarValue(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatCalendarLabel(value: Date) {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  }).format(value);
+}
+
+function formatCalendarMonth(value: Date) {
+  return new Intl.DateTimeFormat("en-GB", {
+    month: "long",
+    year: "numeric"
+  }).format(value);
+}
+
+function parseTaskDueDate(value?: string) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) {
+    return normalizeDate(parsed);
+  }
+  const fallback = parseDisplayDate(value);
+  return fallback ? normalizeDate(fallback) : null;
+}
+
+function isSameCalendarDay(left: Date | null, right: Date | null) {
+  if (!left || !right) return false;
+  return (
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate()
+  );
+}
+
+function DatePickerField({
+  label,
+  name,
+  defaultValue,
+  required
+}: {
+  label: string;
+  name: string;
+  defaultValue?: string;
+  required?: boolean;
+}) {
+  const initialDate = parseTaskDueDate(defaultValue);
+  const [selectedDate, setSelectedDate] = useState<Date | null>(initialDate);
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [visibleMonth, setVisibleMonth] = useState<Date>(initialDate ?? normalizeDate(new Date()));
+
+  const monthStart = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1);
+  const monthEnd = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 0);
+  const startOffset = (monthStart.getDay() + 6) % 7;
+  const daysInMonth = monthEnd.getDate();
+  const leadingDays = Array.from({ length: startOffset });
+  const trailingDays = Array.from({
+    length: (7 - ((startOffset + daysInMonth) % 7 || 7)) % 7
+  });
+  const weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+  return (
+    <label className="block text-sm font-medium text-black">
+      <span className="mb-2 block">{label}</span>
+      <div className="relative">
+        <input
+          type="hidden"
+          name={name}
+          value={selectedDate ? formatCalendarValue(selectedDate) : ""}
+          required={required}
+          readOnly
+        />
+        <button
+          type="button"
+          onClick={() => setCalendarOpen((value) => !value)}
+          className="flex w-full items-center justify-between rounded-md border border-neutral-300 bg-white px-3 py-2 text-left text-sm text-black hover:bg-neutral-50 focus:border-black"
+        >
+          <span>{selectedDate ? formatCalendarLabel(selectedDate) : "Select due date"}</span>
+          <span className="text-neutral-500" aria-hidden="true">
+            &#x1F4C5;
+          </span>
+        </button>
+        {calendarOpen && (
+          <div className="absolute left-0 top-full z-40 mt-2 w-72 rounded-md border border-neutral-200 bg-white p-3 shadow-sm">
+            <div className="mb-3 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() =>
+                  setVisibleMonth(
+                    new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() - 1, 1)
+                  )
+                }
+                className="rounded-md border border-neutral-300 px-2 py-1 text-sm hover:bg-neutral-100"
+                aria-label="Previous month"
+              >
+                ‹
+              </button>
+              <div className="text-sm font-semibold text-black">{formatCalendarMonth(visibleMonth)}</div>
+              <button
+                type="button"
+                onClick={() =>
+                  setVisibleMonth(
+                    new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 1)
+                  )
+                }
+                className="rounded-md border border-neutral-300 px-2 py-1 text-sm hover:bg-neutral-100"
+                aria-label="Next month"
+              >
+                ›
+              </button>
+            </div>
+            <div className="mb-2 grid grid-cols-7 gap-1 text-center text-xs text-neutral-500">
+              {weekdays.map((day) => (
+                <div key={day} className="py-1">
+                  {day}
+                </div>
+              ))}
+            </div>
+            <div className="grid grid-cols-7 gap-1">
+              {leadingDays.map((_, index) => (
+                <div key={`leading-${index}`} className="h-9" />
+              ))}
+              {Array.from({ length: daysInMonth }, (_, index) => {
+                const dayDate = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), index + 1);
+                const isSelected = isSameCalendarDay(selectedDate, dayDate);
+                return (
+                  <button
+                    key={formatCalendarValue(dayDate)}
+                    type="button"
+                    onClick={() => {
+                      setSelectedDate(dayDate);
+                      setVisibleMonth(dayDate);
+                      setCalendarOpen(false);
+                    }}
+                    className={`relative h-9 rounded-md border text-sm transition ${
+                      isSelected
+                        ? "border-black bg-neutral-100 font-semibold text-black"
+                        : "border-transparent text-black hover:border-neutral-300 hover:bg-neutral-50"
+                    }`}
+                  >
+                    <span>{index + 1}</span>
+                    {isSelected && (
+                      <span className="absolute bottom-1 left-1/2 h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-green-600" />
+                    )}
+                  </button>
+                );
+              })}
+              {trailingDays.map((_, index) => (
+                <div key={`trailing-${index}`} className="h-9" />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </label>
+  );
+}
+
 export default function Home() {
   const [users, setUsers] = useState<User[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -158,6 +344,12 @@ export default function Home() {
   const [comments, setComments] = useState<Comment[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [selectedNotification, setSelectedNotification] = useState<Notification | null>(null);
+  const [notificationError, setNotificationError] = useState("");
+  const [notificationLoading, setNotificationLoading] = useState(false);
   const [activeClockSession, setActiveClockSession] = useState<ClockSession | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [page, setPage] = useState<Page>("admin-dashboard");
@@ -211,6 +403,12 @@ export default function Home() {
     setComments([]);
     setHistory([]);
     setAuditLogs([]);
+    setNotifications([]);
+    setNotificationUnreadCount(0);
+    setNotificationsOpen(false);
+    setSelectedNotification(null);
+    setNotificationError("");
+    setNotificationLoading(false);
     setActiveClockSession(null);
     setSelectedTaskId("");
     setSelectedProjectId("");
@@ -255,9 +453,29 @@ export default function Home() {
       const data = await fetchAppState();
       applyAppState(data, preserveUserId);
       setSessionError("");
+      if (preserveUserId) {
+        void refreshNotifications();
+      }
       return data;
     } finally {
       setIsAppLoading(false);
+    }
+  };
+
+  const refreshNotifications = async () => {
+    setNotificationLoading(true);
+    try {
+      const [notificationsResponse, unreadCountResponse] = await Promise.all([
+        fetchNotifications(),
+        fetchNotificationUnreadCount()
+      ]);
+      setNotifications(notificationsResponse.notifications);
+      setNotificationUnreadCount(unreadCountResponse.count);
+      setNotificationError("");
+    } catch (error) {
+      setNotificationError(error instanceof Error ? error.message : "Unable to load notifications.");
+    } finally {
+      setNotificationLoading(false);
     }
   };
 
@@ -309,6 +527,12 @@ export default function Home() {
     }, 1000);
     return () => window.clearInterval(intervalId);
   }, [activeClockSession]);
+
+  useEffect(() => {
+    if (page !== "admin-dashboard" && page !== "developer-dashboard") {
+      setNotificationsOpen(false);
+    }
+  }, [page]);
 
   useEffect(() => {
     if (!loginHistoryUserId || currentUser?.role !== "Admin") return;
@@ -378,6 +602,45 @@ export default function Home() {
       setCurrentUser(null);
       setMobileOpen(false);
       setPage("admin-dashboard");
+    }
+  };
+
+  const markNotificationAsRead = async (notificationId: string) => {
+    try {
+      await apiMarkNotificationAsRead(notificationId);
+      setNotifications((current) =>
+        current.map((notification) =>
+          notification.id === notificationId ? { ...notification, isRead: true } : notification
+        )
+      );
+      setNotificationUnreadCount((current) => Math.max(0, current - 1));
+    } catch (error) {
+      showActionError(error, "Unable to mark notification as read.");
+    }
+  };
+
+  const openNotification = async (notification: Notification) => {
+    setSelectedNotification(notification);
+    setNotificationsOpen(false);
+    if (notification.isRead) {
+      return;
+    }
+
+    await markNotificationAsRead(notification.id);
+    setSelectedNotification((current) => (current?.id === notification.id ? { ...current, isRead: true } : current));
+  };
+
+  const viewNotificationTarget = (notification: Notification) => {
+    if (notification.entityType === "Task" && notification.entityId) {
+      setSelectedNotification(null);
+      openTaskDetails(notification.entityId);
+      return;
+    }
+
+    if (notification.entityType === "Project" && notification.entityId) {
+      setSelectedNotification(null);
+      setSelectedProjectId(notification.entityId);
+      navigate("projects");
     }
   };
 
@@ -736,6 +999,9 @@ export default function Home() {
   }
 
   const authUser = currentUser;
+  const isDashboardPage = page === "admin-dashboard" || page === "developer-dashboard";
+  const notificationBadgeText =
+    notificationUnreadCount > 99 ? "99+" : notificationUnreadCount > 0 ? String(notificationUnreadCount) : "";
 
   const navItems =
     authUser.role === "Admin"
@@ -814,6 +1080,64 @@ export default function Home() {
             <h1 className="truncate text-lg font-semibold sm:text-xl">{pageTitle}</h1>
           </div>
           <div className="flex items-center gap-3">
+            {isDashboardPage && (
+              <div className="relative">
+                <button
+                  type="button"
+                  aria-label="Notifications"
+                  onClick={() => setNotificationsOpen((value) => !value)}
+                  className="relative inline-flex h-10 w-10 items-center justify-center rounded-md border border-neutral-300 bg-white text-black hover:bg-neutral-100"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true" className="h-5 w-5 fill-none stroke-current stroke-2">
+                    <path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2a2 2 0 0 1-.6 1.4L4 17h5" />
+                    <path d="M10 21a2 2 0 0 0 4 0" />
+                  </svg>
+                  {notificationBadgeText && (
+                    <span className="absolute -right-1 -top-1 inline-flex min-h-5 min-w-5 items-center justify-center rounded-full bg-black px-1.5 text-[10px] font-semibold text-white">
+                      {notificationBadgeText}
+                    </span>
+                  )}
+                </button>
+                {notificationsOpen && (
+                  <div className="absolute right-0 top-12 z-30 w-80 rounded-md border border-neutral-200 bg-white p-3 shadow-sm">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div className="text-sm font-semibold text-black">Notifications</div>
+                      <div className="text-xs text-neutral-500">{notificationUnreadCount} unread</div>
+                    </div>
+                    {notificationLoading ? (
+                      <div className="py-4 text-sm text-neutral-600">Loading notifications.</div>
+                    ) : notificationError ? (
+                      <div className="py-4 text-sm text-neutral-600">{notificationError}</div>
+                    ) : notifications.length === 0 ? (
+                      <div className="py-4 text-sm text-neutral-600">No notifications.</div>
+                    ) : (
+                      <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+                        {notifications.map((notification) => (
+                          <button
+                            key={notification.id}
+                            type="button"
+                            onClick={() => void openNotification(notification)}
+                            className={`block w-full rounded-md border p-3 text-left text-sm hover:bg-neutral-50 ${
+                              notification.isRead ? "border-neutral-200 bg-white" : "border-black bg-neutral-50"
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <div className={`text-black ${notification.isRead ? "font-medium" : "font-semibold"}`}>
+                                {notification.title}
+                              </div>
+                              <div className="mt-1 line-clamp-2 text-neutral-600">{notification.message}</div>
+                              <div className="mt-2 text-xs text-neutral-500">
+                                {notification.entityType} · {formatNotificationDateTime(notification.createdAt)}
+                              </div>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             {authUser.role === "Developer" && (
               activeClockSession ? (
                 <div className="text-right text-sm">
@@ -922,6 +1246,31 @@ export default function Home() {
           onSubmit={(event) => changePassword(event, modal.userId)}
           onClose={() => setModal(null)}
         />
+      )}
+      {selectedNotification && (
+        <Modal title="Notification" onClose={() => setSelectedNotification(null)} showCloseButton={false}>
+          <div className="space-y-6">
+            <div className="space-y-3">
+              <div>
+                <div className="text-lg font-semibold text-black">{selectedNotification.title}</div>
+                <div className="mt-2 text-sm text-neutral-700">{selectedNotification.message}</div>
+              </div>
+              <div className="text-sm text-neutral-600">
+                <div>Type: {selectedNotification.entityType}</div>
+                <div className="mt-1">{formatNotificationDateTime(selectedNotification.createdAt)}</div>
+              </div>
+            </div>
+            <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
+              {selectedNotification.entityId &&
+                (selectedNotification.entityType === "Task" || selectedNotification.entityType === "Project") && (
+                  <Button variant="secondary" onClick={() => viewNotificationTarget(selectedNotification)}>
+                    {selectedNotification.entityType === "Task" ? "View Task" : "View Project"}
+                  </Button>
+                )}
+              <Button onClick={() => setSelectedNotification(null)}>Close</Button>
+            </div>
+          </div>
+        </Modal>
       )}
       {deleteTaskId && (
         <ConfirmDialog
@@ -1938,7 +2287,7 @@ export default function Home() {
               )}
             </>
           )}
-          <Input label="Due date" name="dueDate" type="text" defaultValue={task?.dueDate} placeholder="15 May 2026" required />
+          <DatePickerField label="Due date" name="dueDate" defaultValue={task?.dueDate} required />
           {!task && <p className="text-sm text-neutral-600">Initial status will be Pending.</p>}
           <FormActions onCancel={onClose} />
         </form>
