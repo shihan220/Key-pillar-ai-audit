@@ -615,6 +615,10 @@ export default function Home() {
         setNotificationUnreadCount(unreadCountResponse.count);
       })
       .catch((error) => {
+        if (cancelled) return;
+        setNotifications([]);
+        setNotificationUnreadCount(0);
+        setSelectedNotification(null);
         console.error(error);
       });
 
