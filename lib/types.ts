@@ -23,6 +23,18 @@ export type ClockSession = {
   updatedAt: string;
 };
 
+export type Notification = {
+  id: string;
+  action: string;
+  entityType: string;
+  entityId?: string | null;
+  title: string;
+  message: string;
+  isRead: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type User = {
   id: string;
   name: string;

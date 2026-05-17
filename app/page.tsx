@@ -31,10 +31,13 @@ import {
   deleteProject as apiDeleteProject,
   deleteTask as apiDeleteTask,
   fetchAppState,
+  fetchNotifications as apiFetchNotifications,
+  fetchNotificationUnreadCount,
   fetchUserClockHistory,
   getStoredUser,
   login as apiLogin,
   logout as apiLogout,
+  markNotificationAsRead as apiMarkNotificationAsRead,
   reassignTask as apiReassignTask,
   removeFailedStatus as apiRemoveFailedStatus,
   storeAuthSession,
@@ -42,7 +45,19 @@ import {
   updateTask as apiUpdateTask,
   updateUser as apiUpdateUser
 } from "@/lib/api";
-import { AuditLog, ClockSession, Comment, HistoryItem, Project, ProjectStatus, Role, Status, Task, User } from "@/lib/types";
+import {
+  AuditLog,
+  ClockSession,
+  Comment,
+  HistoryItem,
+  Notification,
+  Project,
+  ProjectStatus,
+  Role,
+  Status,
+  Task,
+  User
+} from "@/lib/types";
 
 type Page =
   | "admin-dashboard"
@@ -151,6 +166,239 @@ function formatWorkTime(value: string) {
     .toUpperCase();
 }
 
+function formatNotificationDateTime(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true
+  })
+    .format(parsed)
+    .toUpperCase();
+}
+
+function normalizeDate(value: Date) {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+}
+
+function formatCalendarValue(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatCalendarLabel(value: Date) {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  }).format(value);
+}
+
+function formatCalendarMonth(value: Date) {
+  return new Intl.DateTimeFormat("en-GB", {
+    month: "long",
+    year: "numeric"
+  }).format(value);
+}
+
+function parseTaskDueDate(value?: string) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) {
+    return normalizeDate(parsed);
+  }
+  const fallback = parseDisplayDate(value);
+  return fallback ? normalizeDate(fallback) : null;
+}
+
+function isSameCalendarDay(left: Date | null, right: Date | null) {
+  if (!left || !right) return false;
+  return (
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate()
+  );
+}
+
+function DatePickerField({
+  label,
+  name,
+  defaultValue,
+  required
+}: {
+  label: string;
+  name: string;
+  defaultValue?: string;
+  required?: boolean;
+}) {
+  const initialDate = parseTaskDueDate(defaultValue);
+  const [selectedDate, setSelectedDate] = useState<Date | null>(initialDate);
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [visibleMonth, setVisibleMonth] = useState<Date>(initialDate ?? normalizeDate(new Date()));
+
+  const monthStart = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1);
+  const monthEnd = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 0);
+  const startOffset = (monthStart.getDay() + 6) % 7;
+  const daysInMonth = monthEnd.getDate();
+  const leadingDays = Array.from({ length: startOffset });
+  const trailingDays = Array.from({
+    length: (7 - ((startOffset + daysInMonth) % 7 || 7)) % 7
+  });
+  const weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+  return (
+    <label className="block text-sm font-medium text-black">
+      <span className="mb-2 block">{label}</span>
+      <div className="relative">
+        <input
+          type="hidden"
+          name={name}
+          value={selectedDate ? formatCalendarValue(selectedDate) : ""}
+          required={required}
+          readOnly
+        />
+        <button
+          type="button"
+          onClick={() => setCalendarOpen((value) => !value)}
+          className="flex w-full items-center justify-between rounded-md border border-neutral-300 bg-white px-3 py-2 text-left text-sm text-black hover:bg-neutral-50 focus:border-black"
+        >
+          <span>{selectedDate ? formatCalendarLabel(selectedDate) : "Select due date"}</span>
+          <span className="text-neutral-500" aria-hidden="true">
+            &#x1F4C5;
+          </span>
+        </button>
+        {calendarOpen && (
+          <div className="absolute left-0 top-full z-40 mt-2 w-72 rounded-md border border-neutral-200 bg-white p-3 shadow-sm">
+            <div className="mb-3 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() =>
+                  setVisibleMonth(
+                    new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() - 1, 1)
+                  )
+                }
+                className="rounded-md border border-neutral-300 px-2 py-1 text-sm hover:bg-neutral-100"
+                aria-label="Previous month"
+              >
+                ‹
+              </button>
+              <div className="text-sm font-semibold text-black">{formatCalendarMonth(visibleMonth)}</div>
+              <button
+                type="button"
+                onClick={() =>
+                  setVisibleMonth(
+                    new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 1)
+                  )
+                }
+                className="rounded-md border border-neutral-300 px-2 py-1 text-sm hover:bg-neutral-100"
+                aria-label="Next month"
+              >
+                ›
+              </button>
+            </div>
+            <div className="mb-2 grid grid-cols-7 gap-1 text-center text-xs text-neutral-500">
+              {weekdays.map((day) => (
+                <div key={day} className="py-1">
+                  {day}
+                </div>
+              ))}
+            </div>
+            <div className="grid grid-cols-7 gap-1">
+              {leadingDays.map((_, index) => (
+                <div key={`leading-${index}`} className="h-9" />
+              ))}
+              {Array.from({ length: daysInMonth }, (_, index) => {
+                const dayDate = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), index + 1);
+                const isSelected = isSameCalendarDay(selectedDate, dayDate);
+                return (
+                  <button
+                    key={formatCalendarValue(dayDate)}
+                    type="button"
+                    onClick={() => {
+                      setSelectedDate(dayDate);
+                      setVisibleMonth(dayDate);
+                      setCalendarOpen(false);
+                    }}
+                    className={`relative h-9 rounded-md border text-sm transition ${
+                      isSelected
+                        ? "border-black bg-neutral-100 font-semibold text-black"
+                        : "border-transparent text-black hover:border-neutral-300 hover:bg-neutral-50"
+                    }`}
+                  >
+                    <span>{index + 1}</span>
+                    {isSelected && (
+                      <span className="absolute bottom-1 left-1/2 h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-green-600" />
+                    )}
+                  </button>
+                );
+              })}
+              {trailingDays.map((_, index) => (
+                <div key={`trailing-${index}`} className="h-9" />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </label>
+  );
+}
+
+function readDashboardRouteState() {
+  if (typeof window === "undefined") return null;
+
+  const url = new URL(window.location.href);
+  const section = url.searchParams.get("section");
+  const status = url.searchParams.get("status");
+
+  const projectFilter: AdminProjectDashboardFilter =
+    status === "active" ? "active" : status === "completed" ? "completed" : "all";
+
+  const taskFilter: AdminTaskDashboardFilter =
+    status === "pending"
+      ? "pending"
+      : status === "in-progress"
+        ? "in-progress"
+        : status === "failed"
+          ? "failed"
+          : status === "waiting-for-approval"
+            ? "waiting-for-approval"
+            : status === "complete"
+              ? "complete"
+              : "all";
+
+  if (section === "projects") {
+    return {
+      page: "projects" as Page,
+      projectFilter,
+      taskFilter: "all" as AdminTaskDashboardFilter
+    };
+  }
+
+  if (section === "tasks") {
+    return {
+      page: "tasks" as Page,
+      projectFilter: "all" as AdminProjectDashboardFilter,
+      taskFilter
+    };
+  }
+
+  if (section === "developers") {
+    return {
+      page: "developers" as Page,
+      projectFilter: "all" as AdminProjectDashboardFilter,
+      taskFilter: "all" as AdminTaskDashboardFilter
+    };
+  }
+
+  return null;
+}
+
 export default function Home() {
   const [users, setUsers] = useState<User[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -158,6 +406,9 @@ export default function Home() {
   const [comments, setComments] = useState<Comment[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
+  const [selectedNotification, setSelectedNotification] = useState<Notification | null>(null);
   const [activeClockSession, setActiveClockSession] = useState<ClockSession | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [page, setPage] = useState<Page>("admin-dashboard");
@@ -211,6 +462,9 @@ export default function Home() {
     setComments([]);
     setHistory([]);
     setAuditLogs([]);
+    setNotifications([]);
+    setNotificationUnreadCount(0);
+    setSelectedNotification(null);
     setActiveClockSession(null);
     setSelectedTaskId("");
     setSelectedProjectId("");
@@ -303,6 +557,22 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (!currentUser || currentUser.role !== "Admin") return;
+
+    const applyRouteState = () => {
+      const routeState = readDashboardRouteState();
+      if (!routeState) return;
+      setAdminProjectDashboardFilter(routeState.projectFilter);
+      setAdminTaskDashboardFilter(routeState.taskFilter);
+      setPage(routeState.page);
+    };
+
+    applyRouteState();
+    window.addEventListener("popstate", applyRouteState);
+    return () => window.removeEventListener("popstate", applyRouteState);
+  }, [currentUser]);
+
+  useEffect(() => {
     if (!activeClockSession) return;
     const intervalId = window.setInterval(() => {
       setClockTick(Date.now());
@@ -327,6 +597,31 @@ export default function Home() {
         setDeveloperWorkHistoryLoading(false);
       });
   }, [currentUser?.role, loginHistoryUserId]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setNotifications([]);
+      setNotificationUnreadCount(0);
+      setSelectedNotification(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    void Promise.all([apiFetchNotifications(), fetchNotificationUnreadCount()])
+      .then(([notificationResponse, unreadCountResponse]) => {
+        if (cancelled) return;
+        setNotifications(notificationResponse.notifications);
+        setNotificationUnreadCount(unreadCountResponse.count);
+      })
+      .catch((error) => {
+        console.error(error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser]);
 
   const projectTaskCounts = (projectId: string) => {
     const projectTasks = activeTasks.filter((task) => task.projectId === projectId);
@@ -691,6 +986,50 @@ export default function Home() {
       (log) => log.user === userName && (log.action === "User logged in" || log.action === "User logged out")
     );
 
+  const viewNotificationTarget = (notification: Notification) => {
+    if (!notification.entityId) {
+      setSelectedNotification(null);
+      return;
+    }
+
+    if (notification.entityType === "Task") {
+      setSelectedNotification(null);
+      openTaskDetails(notification.entityId);
+      return;
+    }
+
+    if (notification.entityType === "Project" && currentUser?.role === "Admin") {
+      setSelectedNotification(null);
+      setSelectedProjectId(notification.entityId);
+      navigate("projects");
+      return;
+    }
+
+    setSelectedNotification(null);
+  };
+
+  const openNotification = async (notification: Notification) => {
+    const nextNotification = notification.isRead ? notification : { ...notification, isRead: true };
+    setSelectedNotification(nextNotification);
+
+    if (notification.isRead) return;
+
+    setNotifications((current) =>
+      current.map((item) => (item.id === notification.id ? { ...item, isRead: true } : item))
+    );
+    setNotificationUnreadCount((current) => Math.max(0, current - 1));
+
+    try {
+      await apiMarkNotificationAsRead(notification.id);
+    } catch (error) {
+      setNotifications((current) =>
+        current.map((item) => (item.id === notification.id ? notification : item))
+      );
+      setNotificationUnreadCount((current) => current + 1);
+      showActionError(error, "Failed to update notification.");
+    }
+  };
+
   if (isRestoringSession) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-white p-4">
@@ -725,11 +1064,6 @@ export default function Home() {
               Login
             </Button>
           </form>
-          <div className="mt-4 text-xs text-neutral-600">
-            Admin: admin@keypillarai.local / admin123
-            <br />
-            Developers: rahim@keypillarai.local or karim@keypillarai.local / dev123
-          </div>
         </Card>
       </main>
     );
@@ -737,8 +1071,6 @@ export default function Home() {
 
   const authUser = currentUser;
   const isDashboardPage = page === "admin-dashboard" || page === "developer-dashboard";
-  const notificationBadgeText =
-    notificationUnreadCount > 99 ? "99+" : notificationUnreadCount > 0 ? String(notificationUnreadCount) : "";
 
   const navItems =
     authUser.role === "Admin"
@@ -1038,16 +1370,16 @@ export default function Home() {
     return (
       <div className="space-y-6">
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          <DashboardNavCard label="Total Projects" value={counts.totalProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "all", path: "/projects" })} />
-          <DashboardNavCard label="Active Projects" value={counts.activeProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "active", path: "/projects?status=active" })} />
-          <DashboardNavCard label="Completed Projects" value={counts.completedProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "completed", path: "/projects?status=completed" })} />
-          <DashboardNavCard label="Total Tasks" value={counts.totalTasks} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "all", path: "/tasks" })} />
-          <DashboardNavCard label="Pending Tasks" value={counts.pending} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "pending", path: "/tasks?status=pending" })} />
-          <DashboardNavCard label="In Progress Tasks" value={counts.progress} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "in-progress", path: "/tasks?status=in-progress" })} />
-          <DashboardNavCard label="Failed Tasks" value={counts.failed} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "failed", path: "/tasks?status=failed" })} />
-          <DashboardNavCard label="Waiting for Approval Tasks" value={counts.waiting} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "waiting-for-approval", path: "/tasks?status=waiting-for-approval" })} />
-          <DashboardNavCard label="Completed Tasks" value={counts.complete} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "complete", path: "/tasks?status=complete" })} />
-          <DashboardNavCard label="Total Developers" value={counts.developers} onClick={() => openAdminDashboardTarget("developers", { path: "/developers" })} />
+          <DashboardNavCard label="Total Projects" value={counts.totalProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "all", path: "/?section=projects" })} />
+          <DashboardNavCard label="Active Projects" value={counts.activeProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "active", path: "/?section=projects&status=active" })} />
+          <DashboardNavCard label="Completed Projects" value={counts.completedProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "completed", path: "/?section=projects&status=completed" })} />
+          <DashboardNavCard label="Total Tasks" value={counts.totalTasks} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "all", path: "/?section=tasks" })} />
+          <DashboardNavCard label="Pending Tasks" value={counts.pending} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "pending", path: "/?section=tasks&status=pending" })} />
+          <DashboardNavCard label="In Progress Tasks" value={counts.progress} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "in-progress", path: "/?section=tasks&status=in-progress" })} />
+          <DashboardNavCard label="Failed Tasks" value={counts.failed} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "failed", path: "/?section=tasks&status=failed" })} />
+          <DashboardNavCard label="Waiting for Approval Tasks" value={counts.waiting} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "waiting-for-approval", path: "/?section=tasks&status=waiting-for-approval" })} />
+          <DashboardNavCard label="Completed Tasks" value={counts.complete} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "complete", path: "/?section=tasks&status=complete" })} />
+          <DashboardNavCard label="Total Developers" value={counts.developers} onClick={() => openAdminDashboardTarget("developers", { path: "/?section=developers" })} />
         </div>
 
         <Card>

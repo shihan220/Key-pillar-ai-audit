@@ -1,4 +1,4 @@
-import { AuditLog, ClockSession, Comment, HistoryItem, Project, Task, User } from "./types";
+import { AuditLog, ClockSession, Comment, HistoryItem, Notification, Project, Task, User } from "./types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
 
@@ -147,6 +147,18 @@ export function fetchCurrentClockSession() {
 
 export function fetchClockHistory() {
   return request<{ sessions: ClockSession[] }>("/clock-sessions/history");
+}
+
+export function fetchNotifications() {
+  return request<{ notifications: Notification[] }>("/notifications");
+}
+
+export function fetchNotificationUnreadCount() {
+  return request<{ count: number }>("/notifications/unread-count");
+}
+
+export function markNotificationAsRead(notificationId: string) {
+  return request<{ success: boolean }>(`/notifications/${notificationId}/read`, "POST");
 }
 
 export function fetchUserClockHistory(userId: string) {
