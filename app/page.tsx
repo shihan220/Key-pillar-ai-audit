@@ -2093,22 +2093,118 @@ export default function Home() {
   function SettingsPage() {
     return (
       <div className="grid gap-6 xl:grid-cols-2">
-        <Card>
-          <SectionTitle title="Company Profile" />
-          <Info label="Company name" value="Key Pillar Ai" />
-          <Info label="App name" value="Audit Log & Task Tracking App" />
+        <Card className="p-0">
+          <div className="border-b border-neutral-200 p-5">
+            <SectionTitle title="Company Profile" />
+            <div className="flex items-center gap-4">
+              <img
+                src="/brand/keypillar-ai-logo.jpeg"
+                alt="Keypillar AI logo"
+                className="h-14 w-14 rounded-md object-cover"
+              />
+              <div>
+                <div className="text-lg font-semibold text-black">Keypillar AI</div>
+                <div className="mt-1 text-sm text-neutral-600">Audit Log & Task Tracking App</div>
+              </div>
+            </div>
+          </div>
+          <div className="grid gap-4 p-5 sm:grid-cols-2">
+            <div className="rounded-md border border-neutral-200 p-4">
+              <div className="text-xs font-semibold uppercase text-neutral-500">Company Name</div>
+              <div className="mt-2 text-sm font-medium text-black">Keypillar AI</div>
+            </div>
+            <div className="rounded-md border border-neutral-200 p-4">
+              <div className="text-xs font-semibold uppercase text-neutral-500">App Name</div>
+              <div className="mt-2 text-sm font-medium text-black">Audit Log & Task Tracking App</div>
+            </div>
+          </div>
         </Card>
-        <Card>
-          <SectionTitle title="App Theme" />
-          <Badge className="border-black bg-white text-black">Black and white selected</Badge>
+
+        <Card className="p-0">
+          <div className="border-b border-neutral-200 p-5">
+            <SectionTitle title="App Theme" />
+          </div>
+          <div className="p-5">
+            <div className="rounded-md border border-black bg-white p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-xs font-semibold uppercase text-neutral-500">Theme</div>
+                  <div className="mt-2 text-base font-semibold text-black">Black &amp; White</div>
+                </div>
+                <Badge className="border-black bg-black text-white">Active</Badge>
+              </div>
+              <div className="mt-4 flex gap-2">
+                <span className="h-6 w-6 rounded-full border border-black bg-black" aria-hidden="true" />
+                <span className="h-6 w-6 rounded-full border border-neutral-300 bg-white" aria-hidden="true" />
+              </div>
+            </div>
+          </div>
         </Card>
-        <Card>
-          <SectionTitle title="Password Management Rules" />
-          <RuleList items={["Email and password login", "Developers cannot change passwords", "Admin can change passwords"]} />
+
+        <Card className="p-0">
+          <div className="border-b border-neutral-200 p-5">
+            <SectionTitle title="Notification Settings" />
+          </div>
+          <div className="grid gap-3 p-5 sm:grid-cols-2">
+            {[
+              "Task updates enabled",
+              "Project updates enabled",
+              "Approval updates enabled",
+              "Login/logout excluded"
+            ].map((item) => (
+              <div key={item} className="rounded-md border border-neutral-200 p-4 text-sm text-black">
+                {item}
+              </div>
+            ))}
+          </div>
         </Card>
-        <Card>
-          <SectionTitle title="Task Status Rules" />
-          <RuleList items={statuses} />
+
+        <Card className="p-0">
+          <div className="border-b border-neutral-200 p-5">
+            <SectionTitle title="Password Management Rules" />
+          </div>
+          <div className="flex flex-wrap gap-3 p-5">
+            {[
+              "Email and password login",
+              "Developers cannot change passwords",
+              "Admin can change passwords"
+            ].map((item) => (
+              <Badge key={item} className="border-neutral-300 bg-white px-3 py-2 text-sm text-black">
+                {item}
+              </Badge>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="p-0">
+          <div className="border-b border-neutral-200 p-5">
+            <SectionTitle title="Task Status Rules" />
+          </div>
+          <div className="flex flex-wrap gap-3 p-5">
+            {statuses.map((status) => (
+              <StatusBadge key={status} status={status} />
+            ))}
+          </div>
+        </Card>
+
+        <Card className="p-0">
+          <div className="border-b border-neutral-200 p-5">
+            <SectionTitle title="System Info" />
+          </div>
+          <div className="grid gap-4 p-5 sm:grid-cols-3">
+            <div className="rounded-md border border-neutral-200 p-4">
+              <div className="text-xs font-semibold uppercase text-neutral-500">Frontend</div>
+              <div className="mt-2 text-sm font-medium text-black">Active</div>
+            </div>
+            <div className="rounded-md border border-neutral-200 p-4">
+              <div className="text-xs font-semibold uppercase text-neutral-500">Backend</div>
+              <div className="mt-2 text-sm font-medium text-black">Connected</div>
+            </div>
+            <div className="rounded-md border border-neutral-200 p-4">
+              <div className="text-xs font-semibold uppercase text-neutral-500">Database</div>
+              <div className="mt-2 text-sm font-medium text-black">PostgreSQL</div>
+            </div>
+          </div>
         </Card>
       </div>
     );
