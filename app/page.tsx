@@ -91,6 +91,10 @@ type AdminDashboardView =
   | { kind: "projects"; title: string; filter: AdminProjectDashboardFilter }
   | { kind: "tasks"; title: string; filter: AdminTaskDashboardFilter }
   | { kind: "developers"; title: string };
+type DeveloperDashboardTaskFilter = "all" | "pending" | "in-progress" | "failed" | "waiting-for-approval" | "complete";
+type DeveloperDashboardView =
+  | null
+  | { kind: "tasks"; title: string; filter: DeveloperDashboardTaskFilter };
 
 const statuses: Status[] = ["Pending", "In Progress", "Failed", "Waiting for Approval", "Complete"];
 const projectStatuses: ProjectStatus[] = ["Not Started", "In Progress", "Completed", "Archived"];
@@ -490,6 +494,7 @@ export default function Home() {
   const [adminProjectDashboardFilter, setAdminProjectDashboardFilter] = useState<AdminProjectDashboardFilter>("all");
   const [adminTaskDashboardFilter, setAdminTaskDashboardFilter] = useState<AdminTaskDashboardFilter>("all");
   const [selectedDashboardView, setSelectedDashboardView] = useState<AdminDashboardView>(null);
+  const [selectedDeveloperDashboardView, setSelectedDeveloperDashboardView] = useState<DeveloperDashboardView>(null);
   const [settingsPasswordMessage, setSettingsPasswordMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [settingsCurrentPassword, setSettingsCurrentPassword] = useState("");
   const [settingsNewPassword, setSettingsNewPassword] = useState("");
@@ -521,6 +526,7 @@ export default function Home() {
 
   const resetLandingState = (role?: Role) => {
     setSelectedDashboardView(null);
+    setSelectedDeveloperDashboardView(null);
     setAdminProjectDashboardFilter("all");
     setAdminTaskDashboardFilter("all");
     setSelectedProjectId("");
@@ -844,6 +850,7 @@ export default function Home() {
     if (currentUser.role === "Developer" && adminOnly.includes(nextPage)) return;
     if (currentUser.role === "Admin" && developerOnly.includes(nextPage)) return;
     setSelectedDashboardView(null);
+    setSelectedDeveloperDashboardView(null);
     if (nextPage === "projects") {
       setAdminProjectDashboardFilter("all");
     }
@@ -1967,16 +1974,105 @@ export default function Home() {
     const myTasks = activeTasks.filter((task) => task.developerId === authUser.id);
     const list = (status: Status) => myTasks.filter((task) => task.status === status);
     const workSections = buildWorkHistorySections(myWorkSessions, clockTick);
+    const dashboardTasks =
+      selectedDeveloperDashboardView?.kind === "tasks"
+        ? selectedDeveloperDashboardView.filter === "pending"
+          ? list("Pending")
+          : selectedDeveloperDashboardView.filter === "in-progress"
+            ? list("In Progress")
+            : selectedDeveloperDashboardView.filter === "failed"
+              ? list("Failed")
+              : selectedDeveloperDashboardView.filter === "waiting-for-approval"
+                ? list("Waiting for Approval")
+                : selectedDeveloperDashboardView.filter === "complete"
+                  ? list("Complete")
+                  : myTasks
+        : [];
+
+    if (selectedDeveloperDashboardView?.kind === "tasks") {
+      return (
+        <div className="space-y-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-xl font-semibold">{selectedDeveloperDashboardView.title}</h2>
+            <Button
+              className="border-[#0B1F3A] bg-[#0B1F3A] text-white hover:bg-[#102A43]"
+              onClick={() => setSelectedDeveloperDashboardView(null)}
+            >
+              Back to Dashboard
+            </Button>
+          </div>
+          <Card className="border-[#0B1F3A] bg-white">
+            <Table headers={["Task Title", "Project", "Status", "Due Date", "Last Updated", "Actions"]}>
+              {dashboardTasks.map((task) => (
+                <tr key={task.id} className="hover:bg-neutral-50">
+                  <Cell>{task.title}</Cell>
+                  <Cell>{projectName(task.projectId)}</Cell>
+                  <Cell>
+                    <StatusBadge status={task.status} />
+                  </Cell>
+                  <Cell>
+                    <DueDateWarning task={task} compact />
+                  </Cell>
+                  <Cell>{task.lastUpdated}</Cell>
+                  <Cell>
+                    <ActionGroup>
+                      <ProjectFileButton project={projectForTask(task)} label="Open Project File" hideWhenMissing />
+                      <Button
+                        variant="secondary"
+                        onClick={() => openTaskDetails(task.id)}
+                      >
+                        View Details
+                      </Button>
+                    </ActionGroup>
+                  </Cell>
+                </tr>
+              ))}
+            </Table>
+            {dashboardTasks.length === 0 && <EmptyState title="No tasks found for this view." />}
+          </Card>
+        </div>
+      );
+    }
 
     return (
       <div className="space-y-6">
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
-          <StatCard label="My Total Tasks" value={myTasks.length} />
-          <StatCard label="Pending" value={list("Pending").length} />
-          <StatCard label="In Progress" value={list("In Progress").length} />
-          <StatCard label="Failed" value={list("Failed").length} />
-          <StatCard label="Waiting for Approval" value={list("Waiting for Approval").length} />
-          <StatCard label="Complete" value={list("Complete").length} />
+          <DashboardNavCard
+            label="My Total Tasks"
+            value={myTasks.length}
+            onClick={() => setSelectedDeveloperDashboardView({ kind: "tasks", title: "All Tasks", filter: "all" })}
+          />
+          <DashboardNavCard
+            label="Pending"
+            value={list("Pending").length}
+            onClick={() => setSelectedDeveloperDashboardView({ kind: "tasks", title: "Pending Tasks", filter: "pending" })}
+          />
+          <DashboardNavCard
+            label="In Progress"
+            value={list("In Progress").length}
+            onClick={() => setSelectedDeveloperDashboardView({ kind: "tasks", title: "In Progress Tasks", filter: "in-progress" })}
+          />
+          <DashboardNavCard
+            label="Failed"
+            value={list("Failed").length}
+            onClick={() => setSelectedDeveloperDashboardView({ kind: "tasks", title: "Failed Tasks", filter: "failed" })}
+          />
+          <DashboardNavCard
+            label="Waiting for Approval"
+            value={list("Waiting for Approval").length}
+            onClick={() =>
+              setSelectedDeveloperDashboardView({
+                kind: "tasks",
+                title: "Waiting for Approval Tasks",
+                filter: "waiting-for-approval",
+              })
+            }
+          />
+          <DashboardNavCard
+            label="Complete"
+            value={list("Complete").length}
+            onClick={() => setSelectedDeveloperDashboardView({ kind: "tasks", title: "Completed Tasks", filter: "complete" })}
+          />
         </div>
         {!activeClockSession && (
           <Card className="border-[#BFDBFE] bg-white">
