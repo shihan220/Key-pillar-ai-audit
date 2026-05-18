@@ -1034,6 +1034,10 @@ export default function Home() {
   const uploadTaskAttachment = async (event: FormEvent<HTMLFormElement>, taskId: string) => {
     event.preventDefault();
     if (!currentUser) return;
+    if (!tasks.some((task) => task.id === taskId && !task.deleted)) {
+      setTaskAttachmentMessage({ type: "error", text: "This task is no longer available for upload." });
+      return;
+    }
     if (!ensureDeveloperCanChangeTasks()) {
       setTaskAttachmentMessage({ type: "error", text: "Please start working before making task changes." });
       return;
@@ -1589,7 +1593,7 @@ export default function Home() {
       )}
       {modal?.name === "upload-task-file" && (
         <Modal title="Upload File" onClose={() => setModal(null)} showCloseButton={false}>
-          <form className="space-y-4" onSubmit={(event) => uploadTaskAttachment(event, modal.taskId)}>
+          <form className="space-y-4" onSubmit={(event) => uploadTaskAttachment(event, modal.taskId)} encType="multipart/form-data">
             <Input
               label="Upload document or image"
               name="attachment"
@@ -2082,9 +2086,9 @@ export default function Home() {
           />
         </div>
         {!activeClockSession && (
-          <Card className="border-[#BFDBFE] bg-white">
-            <div className="text-sm text-neutral-700">Please start working before making task changes.</div>
-          </Card>
+          <div className="rounded-md border border-[#0B1F3A] bg-[#0B1F3A] px-5 py-4">
+            <p className="text-sm font-medium text-white">Please start working before making any task changes!</p>
+          </div>
         )}
         <TaskListSection title="My Current Tasks" tasks={myTasks.filter((task) => ["Pending", "In Progress"].includes(task.status))} />
         <TaskListSection title="My Failed Tasks" tasks={list("Failed")} />
@@ -2408,7 +2412,9 @@ export default function Home() {
 
         <Card>
           <SectionTitle title="Task Status Flow" />
-          <StatusTimeline current={task.status} />
+          <div className="flex items-center">
+            <StatusBadge status={task.status} />
+          </div>
         </Card>
 
         <Card>
@@ -2445,7 +2451,9 @@ export default function Home() {
                 </Button>
               </ActionGroup>
             ) : (
-              <div className="text-sm text-neutral-700">Please start working before making task changes.</div>
+              <div className="rounded-md border border-[#0B1F3A] bg-[#0B1F3A] px-4 py-3 text-sm font-medium text-white">
+                Please start working before making any task changes!
+              </div>
             )
           ) : (
             <ActionGroup>

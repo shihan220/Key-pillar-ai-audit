@@ -218,6 +218,72 @@ async function main() {
         dueAt: parseDate("10 May 2026"),
         createdAt: parseDate("8 May 2026"),
         updatedAt: parseDate("8 May 2026, 9:15 AM")
+      },
+      {
+        id: "t-demo-pending",
+        title: "Demo pending task",
+        description: "Demo task used to preview the Pending status display.",
+        projectId: "p-admin",
+        assignedDeveloperId: "u-rahim",
+        createdById: "u-admin",
+        status: TaskStatus.PENDING,
+        dueAt: parseDate("22 May 2026"),
+        createdAt: parseDate("10 May 2026"),
+        updatedAt: parseDate("10 May 2026, 9:00 AM")
+      },
+      {
+        id: "t-demo-in-progress",
+        title: "Demo in-progress task",
+        description: "Demo task used to preview the In Progress status display.",
+        projectId: "p-crm",
+        assignedDeveloperId: "u-rahim",
+        createdById: "u-admin",
+        status: TaskStatus.IN_PROGRESS,
+        dueAt: parseDate("23 May 2026"),
+        startedAt: parseDate("10 May 2026, 10:00 AM"),
+        createdAt: parseDate("10 May 2026"),
+        updatedAt: parseDate("10 May 2026, 10:00 AM")
+      },
+      {
+        id: "t-demo-failed",
+        title: "Demo failed task",
+        description: "Demo task used to preview the Failed status display.",
+        projectId: "p-website",
+        assignedDeveloperId: "u-karim",
+        createdById: "u-admin",
+        status: TaskStatus.FAILED,
+        dueAt: parseDate("24 May 2026"),
+        startedAt: parseDate("10 May 2026, 11:00 AM"),
+        createdAt: parseDate("10 May 2026"),
+        updatedAt: parseDate("10 May 2026, 11:30 AM")
+      },
+      {
+        id: "t-demo-waiting",
+        title: "Demo waiting for approval task",
+        description: "Demo task used to preview the Waiting for Approval status display.",
+        projectId: "p-crm",
+        assignedDeveloperId: "u-karim",
+        createdById: "u-admin",
+        status: TaskStatus.WAITING_FOR_APPROVAL,
+        dueAt: parseDate("25 May 2026"),
+        submittedForApprovalAt: parseDate("10 May 2026, 12:15 PM"),
+        createdAt: parseDate("10 May 2026"),
+        updatedAt: parseDate("10 May 2026, 12:15 PM")
+      },
+      {
+        id: "t-demo-complete",
+        title: "Demo complete task",
+        description: "Demo task used to preview the Complete status display.",
+        projectId: "p-website",
+        assignedDeveloperId: "u-rahim",
+        createdById: "u-admin",
+        approvedById: "u-admin",
+        status: TaskStatus.COMPLETE,
+        dueAt: parseDate("26 May 2026"),
+        approvedAt: parseDate("10 May 2026, 1:30 PM"),
+        completedAt: parseDate("10 May 2026, 1:30 PM"),
+        createdAt: parseDate("10 May 2026"),
+        updatedAt: parseDate("10 May 2026, 1:30 PM")
       }
     ]
   });

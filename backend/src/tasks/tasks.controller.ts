@@ -1,5 +1,5 @@
-import { Body, Controller, Delete, Param, Patch, Post, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { Body, Controller, Delete, Param, Patch, Post, Req, UploadedFiles, UseGuards, UseInterceptors } from '@nestjs/common';
+import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { CurrentUser } from '../auth/current-user.decorator';
 import type { AuthenticatedUser } from '../auth/auth-user';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -52,14 +52,14 @@ export class TasksController {
   }
 
   @Post(':id/attachments')
-  @UseInterceptors(FileInterceptor('attachment', { limits: { fileSize: 25 * 1024 * 1024 } }))
+  @UseInterceptors(AnyFilesInterceptor({ limits: { fileSize: 25 * 1024 * 1024 } }))
   uploadAttachment(
     @Param('id') id: string,
     @CurrentUser() user: AuthenticatedUser,
-    @UploadedFile() file: any,
+    @UploadedFiles() files: any[],
     @Req() req: any,
   ) {
-    return this.tasksService.uploadAttachment(id, user, file, this.getPublicOrigin(req));
+    return this.tasksService.uploadAttachment(id, user, files?.[0], this.getPublicOrigin(req));
   }
 
   private getPublicOrigin(req: any) {
