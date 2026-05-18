@@ -514,7 +514,7 @@ export default function Home() {
   });
 
   const activeTasks = useMemo(() => tasks.filter((task) => !task.deleted), [tasks]);
-  const selectedTask = activeTasks.find((task) => task.id === selectedTaskId) ?? activeTasks[0];
+  const selectedTask = selectedTaskId ? activeTasks.find((task) => task.id === selectedTaskId) : activeTasks[0];
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
   const developers = users.filter((user) => user.role === "Developer");
   const activeClockDuration = useMemo(() => {
@@ -1455,7 +1455,14 @@ export default function Home() {
           {page === "projects" && <ProjectsPage />}
           {page === "tasks" && <TasksPage />}
           {page === "my-tasks" && <MyTasksPage />}
-          {page === "task-details" && selectedTask && <TaskDetailsPage task={selectedTask} />}
+          {page === "task-details" &&
+            (selectedTask ? (
+              <TaskDetailsPage task={selectedTask} />
+            ) : (
+              <Card>
+                <EmptyState title="Task details are unavailable for this item." />
+              </Card>
+            ))}
           {page === "developers" && <DevelopersPage />}
           {page === "audit-logs" && <AuditLogsPage />}
           {page === "settings" && (
@@ -2340,6 +2347,7 @@ export default function Home() {
   function TaskDetailsPage({ task }: { task: Task }) {
     const taskComments = comments.filter((comment) => comment.taskId === task.id);
     const taskHistory = history.filter((item) => item.taskId === task.id);
+    const taskAttachments = task.attachments ?? [];
     const canComment = authUser.role === "Admin" || task.developerId === authUser.id;
     const canDeveloperChangeTask = authUser.role !== "Developer" || Boolean(activeClockSession);
     const returnLabel =
@@ -2394,7 +2402,7 @@ export default function Home() {
           </div>
           <div className="mt-5">
             <div className="mb-2 text-sm font-semibold">Attachments</div>
-            <TaskAttachmentList attachments={task.attachments} />
+            <TaskAttachmentList attachments={taskAttachments} />
           </div>
         </Card>
 
@@ -2832,7 +2840,7 @@ export default function Home() {
     );
   }
 
-  function TaskAttachmentList({ attachments }: { attachments: TaskAttachment[] }) {
+  function TaskAttachmentList({ attachments = [] }: { attachments?: TaskAttachment[] }) {
     return (
       <div className="space-y-2">
         {attachments.length === 0 ? (
