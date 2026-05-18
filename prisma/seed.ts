@@ -206,6 +206,18 @@ async function main() {
         startedAt: parseDate("9 May 2026, 1:00 PM"),
         createdAt: parseDate("7 May 2026"),
         updatedAt: parseDate("9 May 2026, 1:00 PM")
+      },
+      {
+        id: "t-overdue-warning",
+        title: "Review overdue API documentation",
+        description: "Review and update the API integration notes for the admin panel.",
+        projectId: "p-admin",
+        assignedDeveloperId: "u-karim",
+        createdById: "u-admin",
+        status: TaskStatus.PENDING,
+        dueAt: parseDate("10 May 2026"),
+        createdAt: parseDate("8 May 2026"),
+        updatedAt: parseDate("8 May 2026, 9:15 AM")
       }
     ]
   });

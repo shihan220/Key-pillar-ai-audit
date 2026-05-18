@@ -31,8 +31,8 @@ import {
   deleteProject as apiDeleteProject,
   deleteTask as apiDeleteTask,
   fetchAppState,
+  fetchClockHistory,
   fetchNotifications as apiFetchNotifications,
-  fetchNotificationUnreadCount,
   fetchUserClockHistory,
   getStoredUser,
   login as apiLogin,
@@ -41,6 +41,7 @@ import {
   reassignTask as apiReassignTask,
   removeFailedStatus as apiRemoveFailedStatus,
   storeAuthSession,
+  uploadTaskAttachment as apiUploadTaskAttachment,
   updateProject as apiUpdateProject,
   updateTask as apiUpdateTask,
   updateUser as apiUpdateUser
@@ -55,6 +56,7 @@ import {
   ProjectStatus,
   Role,
   Status,
+  TaskAttachment,
   Task,
   User
 } from "@/lib/types";
@@ -76,6 +78,7 @@ type ModalState =
   | { name: "create-task" }
   | { name: "edit-task"; taskId: string }
   | { name: "reassign-task"; taskId: string }
+  | { name: "upload-task-file"; taskId: string }
   | { name: "create-developer" }
   | { name: "edit-developer"; userId: string }
   | { name: "change-password"; userId: string }
@@ -124,6 +127,51 @@ function isMissedDeadline(task: Task) {
   if (!dueDate) return false;
   dueDate.setHours(23, 59, 59, 999);
   return dueDate.getTime() < Date.now();
+}
+
+function DueDateWarning({ task, compact = false }: { task: Task; compact?: boolean }) {
+  return (
+    <span className={`inline-flex flex-wrap items-center gap-2 ${compact ? "" : "text-sm"}`}>
+      <span>{task.dueDate}</span>
+      {isMissedDeadline(task) && <span className="font-medium text-amber-700">⚠ Overdue</span>}
+    </span>
+  );
+}
+
+function buildWorkHistorySections(sessions: ClockSession[], currentTimeMs: number) {
+  const rows = sessions.map((session) => {
+    const clockIn = new Date(session.clockInAt);
+    const clockOut = session.clockOutAt ? new Date(session.clockOutAt) : null;
+    const completedDuration = clockOut ? Math.max(0, clockOut.getTime() - clockIn.getTime()) : null;
+    const liveDuration = clockOut ? null : Math.max(0, currentTimeMs - clockIn.getTime());
+
+    return {
+      id: session.id,
+      date: formatWorkDate(session.clockInAt),
+      clockIn: formatWorkTime(session.clockInAt),
+      clockOut: clockOut ? formatWorkTime(session.clockOutAt as string) : "In progress",
+      totalWorked: completedDuration !== null ? formatWorkedDuration(completedDuration) : liveDuration !== null ? formatWorkedDuration(liveDuration) : "In progress",
+      completedDuration,
+    };
+  });
+
+  return rows.reduce<
+    { date: string; sessions: typeof rows; dailyTotalMs: number }[]
+  >((groups, row) => {
+    const existing = groups.find((group) => group.date === row.date);
+    if (existing) {
+      existing.sessions.push(row);
+      existing.dailyTotalMs += row.completedDuration ?? 0;
+      return groups;
+    }
+
+    groups.push({
+      date: row.date,
+      sessions: [row],
+      dailyTotalMs: row.completedDuration ?? 0,
+    });
+    return groups;
+  }, []);
 }
 
 function splitDateTime(dateTime: string) {
@@ -446,6 +494,10 @@ export default function Home() {
   const [settingsCurrentPassword, setSettingsCurrentPassword] = useState("");
   const [settingsNewPassword, setSettingsNewPassword] = useState("");
   const [settingsConfirmPassword, setSettingsConfirmPassword] = useState("");
+  const [taskAttachmentMessage, setTaskAttachmentMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [selectedTaskAttachmentName, setSelectedTaskAttachmentName] = useState("");
+  const [myWorkSessions, setMyWorkSessions] = useState<ClockSession[]>([]);
+  const [myWorkHistoryLoading, setMyWorkHistoryLoading] = useState(false);
   const [myTaskFilter, setMyTaskFilter] = useState<Status | "All">("All");
   const [auditFilters, setAuditFilters] = useState({
     user: "",
@@ -496,6 +548,8 @@ export default function Home() {
     setShowClockInPrompt(false);
     setClockOutPromptMode(null);
     setShowLogoutPrompt(false);
+    setTaskAttachmentMessage(null);
+    setSelectedTaskAttachmentName("");
   };
 
   const applyAppState = (
@@ -635,11 +689,11 @@ export default function Home() {
 
     let cancelled = false;
 
-    void Promise.all([apiFetchNotifications(), fetchNotificationUnreadCount()])
-      .then(([notificationResponse, unreadCountResponse]) => {
+    void apiFetchNotifications()
+      .then((notificationResponse) => {
         if (cancelled) return;
         setNotifications(notificationResponse.notifications);
-        setNotificationUnreadCount(unreadCountResponse.count);
+        setNotificationUnreadCount(notificationResponse.notifications.filter((item) => !item.isRead).length);
       })
       .catch((error) => {
         if (cancelled) return;
@@ -647,6 +701,36 @@ export default function Home() {
         setNotificationUnreadCount(0);
         setSelectedNotification(null);
         console.error(error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== "Developer") {
+      setMyWorkSessions([]);
+      setMyWorkHistoryLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setMyWorkHistoryLoading(true);
+
+    void fetchClockHistory()
+      .then((response) => {
+        if (cancelled) return;
+        setMyWorkSessions(response.sessions);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setMyWorkSessions([]);
+        console.error(error);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setMyWorkHistoryLoading(false);
       });
 
     return () => {
@@ -745,6 +829,14 @@ export default function Home() {
     setShowLogoutPrompt(true);
   };
 
+  const ensureDeveloperCanChangeTasks = () => {
+    if (currentUser?.role === "Developer" && !activeClockSession) {
+      window.alert("Please start working before making task changes.");
+      return false;
+    }
+    return true;
+  };
+
   const navigate = (nextPage: Page) => {
     if (!currentUser) return;
     const adminOnly: Page[] = ["admin-dashboard", "projects", "tasks", "developers", "audit-logs", "settings"];
@@ -830,22 +922,23 @@ export default function Home() {
   const editTask = async (event: FormEvent<HTMLFormElement>, taskId: string) => {
     event.preventDefault();
     if (!currentUser) return;
+    if (!ensureDeveloperCanChangeTasks()) return;
     try {
       const form = new FormData(event.currentTarget);
       const body: {
         title: string;
         description: string;
-        dueDate: string;
+        dueDate?: string;
         projectId?: string;
         developerId?: string;
         status?: Status;
       } = {
         title: String(form.get("title")),
-        description: String(form.get("description")),
-        dueDate: String(form.get("dueDate"))
+        description: String(form.get("description"))
       };
 
       if (currentUser.role === "Admin") {
+        body.dueDate = String(form.get("dueDate"));
         body.projectId = String(form.get("projectId"));
         body.developerId = String(form.get("developerId"));
         body.status = form.get("status") as Status;
@@ -896,6 +989,7 @@ export default function Home() {
 
   const changeTaskStatus = async (taskId: string, status: Status) => {
     if (!currentUser) return;
+    if (!ensureDeveloperCanChangeTasks()) return;
     const task = tasks.find((item) => item.id === taskId);
     if (!task) return;
     try {
@@ -913,6 +1007,7 @@ export default function Home() {
   const addComment = async (event: FormEvent<HTMLFormElement>, taskId: string) => {
     event.preventDefault();
     if (!currentUser) return;
+    if (!ensureDeveloperCanChangeTasks()) return;
     try {
       const form = new FormData(event.currentTarget);
       const type = form.get("type") as Comment["type"];
@@ -926,6 +1021,35 @@ export default function Home() {
       event.currentTarget.reset();
     } catch (error) {
       showActionError(error, "Failed to add comment.");
+    }
+  };
+
+  const uploadTaskAttachment = async (event: FormEvent<HTMLFormElement>, taskId: string) => {
+    event.preventDefault();
+    if (!currentUser) return;
+    if (!ensureDeveloperCanChangeTasks()) {
+      setTaskAttachmentMessage({ type: "error", text: "Please start working before making task changes." });
+      return;
+    }
+    try {
+      const form = new FormData(event.currentTarget);
+      const file = form.get("attachment");
+      if (!(file instanceof File) || file.size === 0) {
+        setTaskAttachmentMessage({ type: "error", text: "Please select a file to upload." });
+        return;
+      }
+
+      const payload = new FormData();
+      payload.set("attachment", file);
+      await apiUploadTaskAttachment(taskId, payload);
+      await refreshState(currentUser.id);
+      setTaskAttachmentMessage({ type: "success", text: "File uploaded successfully." });
+      setSelectedTaskAttachmentName("");
+    } catch (error) {
+      setTaskAttachmentMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Failed to upload file."
+      });
     }
   };
 
@@ -1449,6 +1573,41 @@ export default function Home() {
           onClose={() => setModal(null)}
         />
       )}
+      {modal?.name === "upload-task-file" && (
+        <Modal title="Upload File" onClose={() => setModal(null)} showCloseButton={false}>
+          <form className="space-y-4" onSubmit={(event) => uploadTaskAttachment(event, modal.taskId)}>
+            <Input
+              label="Upload document or image"
+              name="attachment"
+              type="file"
+              accept=".jpg,.jpeg,.png,.webp,.pdf,.doc,.docx"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                setSelectedTaskAttachmentName(file?.name ?? "");
+                setTaskAttachmentMessage(null);
+              }}
+            />
+            {selectedTaskAttachmentName && <p className="text-sm text-neutral-600">Selected file: {selectedTaskAttachmentName}</p>}
+            {taskAttachmentMessage && (
+              <div
+                className={`rounded-md border px-3 py-2 text-sm ${
+                  taskAttachmentMessage.type === "success"
+                    ? "border-[#BFDBFE] bg-[#EFF6FF] text-[#111827]"
+                    : "border-red-200 bg-red-50 text-red-700"
+                }`}
+              >
+                {taskAttachmentMessage.text}
+              </div>
+            )}
+            <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
+              <Button variant="secondary" onClick={() => setModal(null)}>
+                Cancel
+              </Button>
+              <Button type="submit">Upload</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
       {modal?.name === "create-developer" && (
         <DeveloperForm title="Create Developer" onSubmit={createDeveloper} onClose={() => setModal(null)} />
       )}
@@ -1669,7 +1828,9 @@ export default function Home() {
                   <Cell>
                     <StatusBadge status={task.status} />
                   </Cell>
-                  <Cell>{task.dueDate}</Cell>
+                  <Cell>
+                    <DueDateWarning task={task} compact />
+                  </Cell>
                   <Cell>{task.lastUpdated}</Cell>
                 </tr>
               ))}
@@ -1805,6 +1966,7 @@ export default function Home() {
   function DeveloperDashboard() {
     const myTasks = activeTasks.filter((task) => task.developerId === authUser.id);
     const list = (status: Status) => myTasks.filter((task) => task.status === status);
+    const workSections = buildWorkHistorySections(myWorkSessions, clockTick);
 
     return (
       <div className="space-y-6">
@@ -1816,9 +1978,42 @@ export default function Home() {
           <StatCard label="Waiting for Approval" value={list("Waiting for Approval").length} />
           <StatCard label="Complete" value={list("Complete").length} />
         </div>
+        {!activeClockSession && (
+          <Card className="border-[#BFDBFE] bg-white">
+            <div className="text-sm text-neutral-700">Please start working before making task changes.</div>
+          </Card>
+        )}
         <TaskListSection title="My Current Tasks" tasks={myTasks.filter((task) => ["Pending", "In Progress"].includes(task.status))} />
         <TaskListSection title="My Failed Tasks" tasks={list("Failed")} />
         <TaskListSection title="My Waiting for Approval Tasks" tasks={list("Waiting for Approval")} />
+        <Card className="border-[#BFDBFE] bg-white">
+          <SectionTitle title="Work History" />
+          {myWorkHistoryLoading ? (
+            <EmptyState title="Loading work history." />
+          ) : workSections.length === 0 ? (
+            <EmptyState title="No work sessions found." />
+          ) : (
+            <div className="space-y-4">
+              {workSections.map((section) => (
+                <div key={section.date} className="space-y-2">
+                  <Table headers={["Date", "Started", "Ended", "Total Worked"]}>
+                    {section.sessions.map((session) => (
+                      <tr key={session.id} className="hover:bg-neutral-50">
+                        <Cell>{session.date}</Cell>
+                        <Cell>{session.clockIn}</Cell>
+                        <Cell>{session.clockOut}</Cell>
+                        <Cell>{session.totalWorked}</Cell>
+                      </tr>
+                    ))}
+                  </Table>
+                  <div className="text-sm font-medium text-neutral-700">
+                    Daily total: {formatWorkedDuration(section.dailyTotalMs)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
       </div>
     );
   }
@@ -1919,7 +2114,9 @@ export default function Home() {
                   <Cell>
                     <StatusBadge status={task.status} />
                   </Cell>
-                  <Cell>{task.dueDate}</Cell>
+                  <Cell>
+                    <DueDateWarning task={task} compact />
+                  </Cell>
                   <Cell>{task.lastUpdated}</Cell>
                   <Cell>
                     <ActionGroup>
@@ -1983,7 +2180,9 @@ export default function Home() {
                 <Cell>
                   <StatusBadge status={task.status} />
                 </Cell>
-                <Cell>{task.dueDate}</Cell>
+                <Cell>
+                  <DueDateWarning task={task} compact />
+                </Cell>
                 <Cell>{task.createdDate}</Cell>
                 <Cell>
                   <ActionGroup>
@@ -2046,6 +2245,7 @@ export default function Home() {
     const taskComments = comments.filter((comment) => comment.taskId === task.id);
     const taskHistory = history.filter((item) => item.taskId === task.id);
     const canComment = authUser.role === "Admin" || task.developerId === authUser.id;
+    const canDeveloperChangeTask = authUser.role !== "Developer" || Boolean(activeClockSession);
     const returnLabel =
       taskReturnPage === "developer-dashboard"
         ? "My Dashboard"
@@ -2075,7 +2275,12 @@ export default function Home() {
           </div>
           <dl className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             <Info label="Assigned developer" value={developerName(task.developerId)} />
-            <Info label="Due date" value={task.dueDate} />
+            <div className="mb-4">
+              <dt className="text-xs font-semibold uppercase text-neutral-500">Due date</dt>
+              <dd className="mt-1 text-sm text-black">
+                <DueDateWarning task={task} />
+              </dd>
+            </div>
             <Info label="Created date" value={task.createdDate} />
             <Info label="Last updated" value={task.lastUpdated} />
             <Info label="Status" value={task.status} />
@@ -2091,6 +2296,10 @@ export default function Home() {
             <div className="mb-2 text-sm font-semibold">Description</div>
             <p className="text-sm text-neutral-700">{task.description}</p>
           </div>
+          <div className="mt-5">
+            <div className="mb-2 text-sm font-semibold">Attachments</div>
+            <TaskAttachmentList attachments={task.attachments} />
+          </div>
         </Card>
 
         <Card>
@@ -2101,28 +2310,39 @@ export default function Home() {
         <Card>
           <SectionTitle title="Actions" />
           {authUser.role === "Developer" ? (
-            <ActionGroup>
-              {task.status === "Pending" && <Button onClick={() => changeTaskStatus(task.id, "In Progress")}>Start Task</Button>}
-              {task.status === "In Progress" && (
-                <>
-                  <Button variant="secondary" onClick={() => changeTaskStatus(task.id, "Failed")}>
-                    Mark as Failed
-                  </Button>
-                  <Button onClick={() => changeTaskStatus(task.id, "Waiting for Approval")}>Send for Approval</Button>
-                </>
-              )}
-              {task.status === "Failed" && (
-                <>
-                  <Button variant="secondary" onClick={() => changeTaskStatus(task.id, "In Progress")}>
-                    Remove Failed Status
-                  </Button>
-                  <Button onClick={() => changeTaskStatus(task.id, "Waiting for Approval")}>Send for Approval</Button>
-                </>
-              )}
-              <Button variant="secondary" onClick={() => setModal({ name: "edit-task", taskId: task.id })}>
-                Edit Task
-              </Button>
-            </ActionGroup>
+            canDeveloperChangeTask ? (
+              <ActionGroup>
+                {task.status === "Pending" && <Button onClick={() => changeTaskStatus(task.id, "In Progress")}>Start Task</Button>}
+                {task.status === "In Progress" && (
+                  <>
+                    <Button variant="secondary" onClick={() => changeTaskStatus(task.id, "Failed")}>
+                      Mark as Failed
+                    </Button>
+                    <Button onClick={() => changeTaskStatus(task.id, "Waiting for Approval")}>Send for Approval</Button>
+                  </>
+                )}
+                {task.status === "Failed" && (
+                  <>
+                    <Button variant="secondary" onClick={() => changeTaskStatus(task.id, "In Progress")}>
+                      Remove Failed Status
+                    </Button>
+                    <Button onClick={() => changeTaskStatus(task.id, "Waiting for Approval")}>Send for Approval</Button>
+                  </>
+                )}
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setTaskAttachmentMessage(null);
+                    setSelectedTaskAttachmentName("");
+                    setModal({ name: "upload-task-file", taskId: task.id });
+                  }}
+                >
+                  Upload File
+                </Button>
+              </ActionGroup>
+            ) : (
+              <div className="text-sm text-neutral-700">Please start working before making task changes.</div>
+            )
           ) : (
             <ActionGroup>
               <Button variant="secondary" onClick={() => setModal({ name: "edit-task", taskId: task.id })}>
@@ -2160,7 +2380,7 @@ export default function Home() {
               </div>
             ))}
           </div>
-          {canComment && (
+          {canComment && (authUser.role !== "Developer" || canDeveloperChangeTask) && (
             <form className="space-y-4" onSubmit={(event) => addComment(event, task.id)}>
               <Textarea label="Comment" name="text" required />
               <Select label="Comment type" name="type" defaultValue="Normal Comment">
@@ -2169,6 +2389,9 @@ export default function Home() {
               </Select>
               <Button type="submit">{authUser.role === "Admin" ? "Add Admin Comment" : "Add Comment"}</Button>
             </form>
+          )}
+          {canComment && authUser.role === "Developer" && !canDeveloperChangeTask && (
+            <div className="text-sm text-neutral-700">Please start working before making task changes.</div>
           )}
         </Card>
 
@@ -2280,38 +2503,7 @@ export default function Home() {
 
   function LoginHistoryModal({ user, onClose }: { user?: User; onClose: () => void }) {
     const records = user ? loginHistoryForUser(user.name) : [];
-    const workRows = developerWorkSessions.map((session) => {
-      const clockIn = new Date(session.clockInAt);
-      const clockOut = session.clockOutAt ? new Date(session.clockOutAt) : null;
-      const completedDuration = clockOut ? Math.max(0, clockOut.getTime() - clockIn.getTime()) : null;
-
-      return {
-        id: session.id,
-        date: formatWorkDate(session.clockInAt),
-        clockIn: formatWorkTime(session.clockInAt),
-        clockOut: clockOut ? formatWorkTime(session.clockOutAt as string) : "In progress",
-        totalWorked: completedDuration !== null ? formatWorkedDuration(completedDuration) : "In progress",
-        completedDuration
-      };
-    });
-
-    const workSections = workRows.reduce<
-      { date: string; sessions: typeof workRows; dailyTotalMs: number }[]
-    >((groups, row) => {
-      const existing = groups.find((group) => group.date === row.date);
-      if (existing) {
-        existing.sessions.push(row);
-        existing.dailyTotalMs += row.completedDuration ?? 0;
-        return groups;
-      }
-
-      groups.push({
-        date: row.date,
-        sessions: [row],
-        dailyTotalMs: row.completedDuration ?? 0
-      });
-      return groups;
-    }, []);
+    const workSections = buildWorkHistorySections(developerWorkSessions, clockTick);
 
     return (
       <Modal title={`${user?.name ?? "Developer"} History`} onClose={onClose} showCloseButton={false}>
@@ -2469,12 +2661,12 @@ export default function Home() {
           {tasks.map((task) => (
             <div
               key={task.id}
-              className="flex flex-col gap-3 rounded-md border border-[#BFDBFE] bg-[#EFF6FF] p-4 sm:flex-row sm:items-center sm:justify-between"
+              className="flex flex-col gap-3 rounded-md border border-neutral-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between"
             >
               <div>
                 <div className="font-medium">{task.title}</div>
                 <div className="text-sm text-neutral-600">
-                  {projectName(task.projectId)} · Due {task.dueDate}
+                  {projectName(task.projectId)} · Due <DueDateWarning task={task} compact />
                 </div>
               </div>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -2484,7 +2676,7 @@ export default function Home() {
                   variant="secondary"
                   onClick={() => openTaskDetails(task.id)}
                 >
-                  Open task
+                  View Details
                 </Button>
               </div>
             </div>
@@ -2506,7 +2698,7 @@ export default function Home() {
             <p className="mt-1 text-sm text-neutral-600">{projectName(task.projectId)}</p>
             <p className="mt-3 text-sm text-neutral-700">{task.description}</p>
             <div className="mt-3 text-sm text-neutral-600">
-              Due {task.dueDate} · Last updated {task.lastUpdated}
+              Due <DueDateWarning task={task} compact /> · Last updated {task.lastUpdated}
             </div>
           </div>
           <div className="flex shrink-0 flex-col gap-3 sm:items-end">
@@ -2541,6 +2733,36 @@ export default function Home() {
       <Button variant="secondary" onClick={() => openProjectAttachment(project)}>
         {label}
       </Button>
+    );
+  }
+
+  function TaskAttachmentList({ attachments }: { attachments: TaskAttachment[] }) {
+    return (
+      <div className="space-y-2">
+        {attachments.length === 0 ? (
+          <div className="text-sm text-neutral-500">No uploaded files.</div>
+        ) : (
+          attachments.map((attachment) => (
+            <div
+              key={attachment.id}
+              className="flex flex-col gap-2 rounded-md border border-neutral-200 bg-neutral-50 p-3 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div>
+                <div className="text-sm font-medium text-black">{attachment.name}</div>
+                <div className="text-xs text-neutral-500">{attachment.uploadedAt}</div>
+              </div>
+              <a
+                href={attachment.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm font-medium text-[#0B1F3A] underline"
+              >
+                View / Download
+              </a>
+            </div>
+          ))
+        )}
+      </div>
     );
   }
 
@@ -2631,9 +2853,9 @@ export default function Home() {
                   ))}
                 </Select>
               )}
+              <DatePickerField label="Due date" name="dueDate" defaultValue={task?.dueDate} required />
             </>
           )}
-          <DatePickerField label="Due date" name="dueDate" defaultValue={task?.dueDate} required />
           {!task && <p className="text-sm text-neutral-600">Initial status will be Pending.</p>}
           <FormActions onCancel={onClose} />
         </form>

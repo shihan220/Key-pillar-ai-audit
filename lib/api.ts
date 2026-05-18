@@ -225,6 +225,10 @@ export function addComment(
   return request<{ success: boolean }>(`/tasks/${taskId}/comments`, "POST", body);
 }
 
+export function uploadTaskAttachment(taskId: string, body: FormData) {
+  return request<{ success: boolean; id: string }>(`/tasks/${taskId}/attachments`, "POST", body);
+}
+
 export function createUser(body: {
   name: string;
   email: string;

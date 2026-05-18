@@ -14,6 +14,14 @@ export type FrontendProjectAttachment = {
   url: string;
 };
 
+export type FrontendTaskAttachment = {
+  id: string;
+  name: string;
+  url: string;
+  mimeType?: string;
+  uploadedAt: string;
+};
+
 export type FrontendClockSession = {
   id: string;
   userId: string;
@@ -73,6 +81,7 @@ export type FrontendTask = {
   dueDate: string;
   createdDate: string;
   lastUpdated: string;
+  attachments: FrontendTaskAttachment[];
   deleted?: boolean;
 };
 

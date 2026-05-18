@@ -50,6 +50,7 @@ model User {
 
   createdProjects            Project[]           @relation("ProjectCreatedBy")
   uploadedProjectAttachments ProjectAttachment[] @relation("ProjectAttachmentUploadedBy")
+  uploadedTaskAttachments    TaskAttachment[]    @relation("TaskAttachmentUploadedBy")
   assignedTasks              Task[]              @relation("TaskAssignedDeveloper")
   createdTasks               Task[]              @relation("TaskCreatedBy")
   approvedTasks              Task[]              @relation("TaskApprovedBy")
@@ -57,6 +58,7 @@ model User {
   taskHistoryEntries         TaskHistory[]       @relation("TaskHistoryActor")
   auditLogs                  AuditLog[]          @relation("AuditLogActor")
   clockSessions              ClockSession[]
+  notifications              Notification[]
 
   @@map("users")
 }
@@ -122,6 +124,7 @@ model Task {
   approvedBy        User?         @relation("TaskApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
   comments          TaskComment[]
   historyEntries    TaskHistory[]
+  attachments       TaskAttachment[]
 
   @@index([projectId])
   @@index([assignedDeveloperId])
@@ -147,6 +150,23 @@ model TaskComment {
   @@index([taskId, createdAt])
   @@index([authorId])
   @@map("task_comments")
+}
+
+model TaskAttachment {
+  id           String   @id @default(cuid())
+  taskId        String   @map("task_id")
+  uploadedById  String?  @map("uploaded_by_id")
+  fileName      String   @map("file_name")
+  storageUrl    String   @map("storage_url")
+  mimeType      String?  @map("mime_type")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  task       Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  uploadedBy User? @relation("TaskAttachmentUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([taskId, createdAt])
+  @@index([uploadedById])
+  @@map("task_attachments")
 }
 
 model TaskHistory {
@@ -200,4 +220,23 @@ model ClockSession {
   @@index([userId, clockOutAt])
   @@index([userId, createdAt])
   @@map("clock_sessions")
+}
+
+model Notification {
+  id         String   @id @default(cuid())
+  userId      String   @map("user_id")
+  action      String
+  entityType  String   @map("entity_type")
+  entityId    String?  @map("entity_id")
+  title       String
+  message     String
+  isRead      Boolean  @default(false) @map("is_read")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead, createdAt])
+  @@index([entityType, entityId])
+  @@map("notifications")
 }
