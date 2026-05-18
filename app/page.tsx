@@ -83,6 +83,11 @@ type ModalState =
 
 type AdminProjectDashboardFilter = "all" | "active" | "completed";
 type AdminTaskDashboardFilter = "all" | "pending" | "in-progress" | "failed" | "waiting-for-approval" | "complete";
+type AdminDashboardView =
+  | null
+  | { kind: "projects"; title: string; filter: AdminProjectDashboardFilter }
+  | { kind: "tasks"; title: string; filter: AdminTaskDashboardFilter }
+  | { kind: "developers"; title: string };
 
 const statuses: Status[] = ["Pending", "In Progress", "Failed", "Waiting for Approval", "Complete"];
 const projectStatuses: ProjectStatus[] = ["Not Started", "In Progress", "Completed", "Archived"];
@@ -408,6 +413,7 @@ export default function Home() {
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [selectedNotification, setSelectedNotification] = useState<Notification | null>(null);
   const [activeClockSession, setActiveClockSession] = useState<ClockSession | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -434,6 +440,8 @@ export default function Home() {
   const [clockTick, setClockTick] = useState(() => Date.now());
   const [adminProjectDashboardFilter, setAdminProjectDashboardFilter] = useState<AdminProjectDashboardFilter>("all");
   const [adminTaskDashboardFilter, setAdminTaskDashboardFilter] = useState<AdminTaskDashboardFilter>("all");
+  const [selectedDashboardView, setSelectedDashboardView] = useState<AdminDashboardView>(null);
+  const [settingsPasswordMessage, setSettingsPasswordMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [myTaskFilter, setMyTaskFilter] = useState<Status | "All">("All");
   const [auditFilters, setAuditFilters] = useState({
     user: "",
@@ -455,6 +463,18 @@ export default function Home() {
     return formatDuration(clockTick - startedAt);
   }, [activeClockSession, clockTick]);
 
+  const resetLandingState = (role?: Role) => {
+    setSelectedDashboardView(null);
+    setAdminProjectDashboardFilter("all");
+    setAdminTaskDashboardFilter("all");
+    setSelectedProjectId("");
+    setSelectedTaskId("");
+    setPage(role === "Developer" ? "developer-dashboard" : "admin-dashboard");
+    if (typeof window !== "undefined") {
+      window.history.replaceState({}, "", "/");
+    }
+  };
+
   const resetAppState = () => {
     setUsers([]);
     setProjects([]);
@@ -464,6 +484,7 @@ export default function Home() {
     setAuditLogs([]);
     setNotifications([]);
     setNotificationUnreadCount(0);
+    setNotificationsOpen(false);
     setSelectedNotification(null);
     setActiveClockSession(null);
     setSelectedTaskId("");
@@ -541,7 +562,7 @@ export default function Home() {
     }
 
     setCurrentUser(storedUser);
-    setPage(storedUser.role === "Admin" ? "admin-dashboard" : "developer-dashboard");
+    resetLandingState(storedUser.role);
     void refreshState(storedUser.id)
       .catch((error) => {
         console.error(error);
@@ -602,6 +623,7 @@ export default function Home() {
     if (!currentUser) {
       setNotifications([]);
       setNotificationUnreadCount(0);
+      setNotificationsOpen(false);
       setSelectedNotification(null);
       return;
     }
@@ -649,7 +671,7 @@ export default function Home() {
       const response = await apiLogin(email, password);
       storeAuthSession(response.accessToken, response.user);
       setCurrentUser(response.user);
-      setPage(response.user.role === "Admin" ? "admin-dashboard" : "developer-dashboard");
+      resetLandingState(response.user.role);
       setLoginError("");
       setSessionError("");
       try {
@@ -676,7 +698,7 @@ export default function Home() {
       resetAppState();
       setCurrentUser(null);
       setMobileOpen(false);
-      setPage("admin-dashboard");
+      resetLandingState("Admin");
     }
   };
 
@@ -719,26 +741,15 @@ export default function Home() {
     const developerOnly: Page[] = ["developer-dashboard", "my-tasks"];
     if (currentUser.role === "Developer" && adminOnly.includes(nextPage)) return;
     if (currentUser.role === "Admin" && developerOnly.includes(nextPage)) return;
+    setSelectedDashboardView(null);
+    if (nextPage === "projects") {
+      setAdminProjectDashboardFilter("all");
+    }
+    if (nextPage === "tasks") {
+      setAdminTaskDashboardFilter("all");
+    }
     setPage(nextPage);
     setMobileOpen(false);
-  };
-
-  const openAdminDashboardTarget = (
-    nextPage: Extract<Page, "projects" | "tasks" | "developers">,
-    options?: {
-      projectFilter?: AdminProjectDashboardFilter;
-      taskFilter?: AdminTaskDashboardFilter;
-      path?: string;
-    }
-  ) => {
-    if (!currentUser || currentUser.role !== "Admin") return;
-    setAdminProjectDashboardFilter(options?.projectFilter ?? "all");
-    setAdminTaskDashboardFilter(options?.taskFilter ?? "all");
-    setPage(nextPage);
-    setMobileOpen(false);
-    if (typeof window !== "undefined" && options?.path) {
-      window.history.pushState({}, "", options.path);
-    }
   };
 
   const openTaskDetails = (taskId: string) => {
@@ -967,6 +978,40 @@ export default function Home() {
     }
   };
 
+  const updateAdminPasswordFromSettings = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!currentUser || currentUser.role !== "Admin") return;
+
+    const form = new FormData(event.currentTarget);
+    const currentPassword = String(form.get("currentPassword") ?? "");
+    const password = String(form.get("password") ?? "");
+    const confirm = String(form.get("confirm") ?? "");
+
+    if (!currentPassword) {
+      setSettingsPasswordMessage({ type: "error", text: "Current password is required." });
+      return;
+    }
+
+    if (password !== confirm) {
+      setSettingsPasswordMessage({ type: "error", text: "New password and confirm password must match." });
+      return;
+    }
+
+    try {
+      await changeUserPassword(currentUser.id, {
+        password,
+        confirmPassword: confirm
+      });
+      setSettingsPasswordMessage({ type: "success", text: "Admin password updated successfully." });
+      event.currentTarget.reset();
+    } catch (error) {
+      setSettingsPasswordMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Failed to update admin password."
+      });
+    }
+  };
+
   const projectName = (projectId: string) => projects.find((project) => project.id === projectId)?.name ?? "Unknown";
   const projectForTask = (task: Task) => projects.find((project) => project.id === task.projectId);
   const developerName = (developerId: string) => users.find((user) => user.id === developerId)?.name ?? "Unassigned";
@@ -1074,7 +1119,8 @@ export default function Home() {
   }
 
   const authUser = currentUser;
-  const isDashboardPage = page === "admin-dashboard" || page === "developer-dashboard";
+  const notificationBadgeText =
+    notificationUnreadCount > 99 ? "99+" : notificationUnreadCount > 0 ? String(notificationUnreadCount) : "";
 
   const navItems =
     authUser.role === "Admin"
@@ -1121,7 +1167,7 @@ export default function Home() {
               key={key}
               onClick={() => navigate(key as Page)}
               className={`w-full rounded-md px-3 py-2 text-left text-sm font-medium ${
-                page === key ? "bg-black text-white" : "text-black hover:bg-neutral-100"
+                page === key ? "bg-[#0B1F3A] text-white" : "text-black hover:bg-neutral-100"
               }`}
             >
               {label}
@@ -1153,6 +1199,57 @@ export default function Home() {
             <h1 className="truncate text-lg font-semibold sm:text-xl">{pageTitle}</h1>
           </div>
           <div className="flex items-center gap-3">
+            {
+              <div className="relative">
+                <button
+                  type="button"
+                  aria-label="Notifications"
+                  onClick={() => setNotificationsOpen((value) => !value)}
+                  className="relative flex h-10 w-10 items-center justify-center rounded-md border border-neutral-300 bg-white text-lg text-black hover:bg-neutral-100"
+                >
+                  <span aria-hidden="true">🔔</span>
+                  {notificationBadgeText && (
+                    <span className="absolute -right-1 -top-1 inline-flex min-h-5 min-w-5 items-center justify-center rounded-full bg-black px-1.5 text-[11px] font-semibold text-white">
+                      {notificationBadgeText}
+                    </span>
+                  )}
+                </button>
+                {notificationsOpen && (
+                  <div className="absolute right-0 top-full z-30 mt-2 w-80 overflow-hidden rounded-md border border-neutral-200 bg-white shadow-sm">
+                    <div className="border-b border-neutral-200 px-4 py-3">
+                      <div className="text-sm font-semibold text-black">Notifications</div>
+                    </div>
+                    <div className="max-h-96 overflow-y-auto">
+                      {notifications.length > 0 ? (
+                        notifications.map((notification) => (
+                          <button
+                            key={notification.id}
+                            type="button"
+                            onClick={() => {
+                              setNotificationsOpen(false);
+                              void openNotification(notification);
+                            }}
+                            className={`block w-full border-b border-neutral-200 px-4 py-3 text-left hover:bg-neutral-50 ${
+                              notification.isRead ? "bg-white" : "bg-neutral-50"
+                            }`}
+                          >
+                            <div className={`text-sm ${notification.isRead ? "font-medium" : "font-semibold"}`}>
+                              {notification.title}
+                            </div>
+                            <div className="mt-1 text-sm text-neutral-600">{notification.message}</div>
+                            <div className="mt-2 text-xs text-neutral-500">
+                              {notification.entityType} · {formatNotificationDateTime(notification.createdAt)}
+                            </div>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="px-4 py-6 text-sm text-neutral-600">No notifications available.</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            }
             {authUser.role === "Developer" && (
               activeClockSession ? (
                 <div className="text-right text-sm">
@@ -1370,23 +1467,158 @@ export default function Home() {
       developers: developers.length
     };
     const waitingTasks = activeTasks.filter((task) => task.status === "Waiting for Approval");
+    const dashboardProjects =
+      selectedDashboardView?.kind === "projects"
+        ? selectedDashboardView.filter === "active"
+          ? projects.filter((project) => resolvedProjectStatus(project) !== "Archived")
+          : selectedDashboardView.filter === "completed"
+            ? projects.filter((project) => resolvedProjectStatus(project) === "Completed")
+            : projects
+        : [];
+    const dashboardTasks =
+      selectedDashboardView?.kind === "tasks"
+        ? selectedDashboardView.filter === "pending"
+          ? activeTasks.filter((task) => task.status === "Pending")
+          : selectedDashboardView.filter === "in-progress"
+            ? activeTasks.filter((task) => task.status === "In Progress")
+            : selectedDashboardView.filter === "failed"
+              ? activeTasks.filter((task) => task.status === "Failed")
+              : selectedDashboardView.filter === "waiting-for-approval"
+                ? activeTasks.filter((task) => task.status === "Waiting for Approval")
+                : selectedDashboardView.filter === "complete"
+                  ? activeTasks.filter((task) => task.status === "Complete")
+                  : activeTasks
+        : [];
+
+    if (selectedDashboardView?.kind === "projects") {
+      return (
+        <div className="space-y-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-xl font-semibold">{selectedDashboardView.title}</h2>
+            <Button
+              className="border-[#0B1F3A] bg-[#0B1F3A] text-white hover:bg-[#102A43]"
+              onClick={() => setSelectedDashboardView(null)}
+            >
+              Back to Dashboard
+            </Button>
+          </div>
+          <Card className="border-[#0B1F3A] bg-white">
+            <Table headers={["Project Name", "Description", "Status", "Total Tasks", "Completed Tasks", "Created Date"]}>
+              {dashboardProjects.map((project) => {
+                const projectCounts = projectTaskCounts(project.id);
+                return (
+                  <tr key={project.id} className="hover:bg-neutral-50">
+                    <Cell>{project.name}</Cell>
+                    <Cell>{project.description}</Cell>
+                    <Cell>
+                      <ProjectStatusBadge status={resolvedProjectStatus(project)} />
+                    </Cell>
+                    <Cell>{projectCounts.total}</Cell>
+                    <Cell>{projectCounts.completed}</Cell>
+                    <Cell>{project.createdDate}</Cell>
+                  </tr>
+                );
+              })}
+            </Table>
+            {dashboardProjects.length === 0 && <EmptyState title="No projects found for this view." />}
+          </Card>
+        </div>
+      );
+    }
+
+    if (selectedDashboardView?.kind === "tasks") {
+      return (
+        <div className="space-y-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-xl font-semibold">{selectedDashboardView.title}</h2>
+            <Button
+              className="border-[#0B1F3A] bg-[#0B1F3A] text-white hover:bg-[#102A43]"
+              onClick={() => setSelectedDashboardView(null)}
+            >
+              Back to Dashboard
+            </Button>
+          </div>
+          <Card className="border-[#0B1F3A] bg-white">
+            <Table headers={["Task Title", "Project", "Assigned Developer", "Status", "Due Date", "Last Updated"]}>
+              {dashboardTasks.map((task) => (
+                <tr key={task.id} className="hover:bg-neutral-50">
+                  <Cell>{task.title}</Cell>
+                  <Cell>{projectName(task.projectId)}</Cell>
+                  <Cell>{developerName(task.developerId)}</Cell>
+                  <Cell>
+                    <StatusBadge status={task.status} />
+                  </Cell>
+                  <Cell>{task.dueDate}</Cell>
+                  <Cell>{task.lastUpdated}</Cell>
+                </tr>
+              ))}
+            </Table>
+            {dashboardTasks.length === 0 && <EmptyState title="No tasks found for this view." />}
+          </Card>
+        </div>
+      );
+    }
+
+    if (selectedDashboardView?.kind === "developers") {
+      return (
+        <div className="space-y-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-xl font-semibold">{selectedDashboardView.title}</h2>
+            <Button
+              className="border-[#0B1F3A] bg-[#0B1F3A] text-white hover:bg-[#102A43]"
+              onClick={() => setSelectedDashboardView(null)}
+            >
+              Back to Dashboard
+            </Button>
+          </div>
+          <Card className="border-[#0B1F3A] bg-white">
+            <Table headers={["Name", "Role", "Account Status", "Completed Tasks", "Failed Tasks", "Last Login"]}>
+              {developers.map((user) => {
+                const developerCounts = developerDetailCounts(user.id);
+                return (
+                  <tr key={user.id} className="hover:bg-neutral-50">
+                    <Cell>{user.name}</Cell>
+                    <Cell>{user.role}</Cell>
+                    <Cell>
+                      <Badge
+                        className={
+                          user.accountStatus === "Active"
+                            ? "border-green-600 bg-white text-green-700"
+                            : "border-red-600 bg-white text-red-700"
+                        }
+                      >
+                        {user.accountStatus}
+                      </Badge>
+                    </Cell>
+                    <Cell>{developerCounts.completedTasks}</Cell>
+                    <Cell>{developerCounts.failedTasks}</Cell>
+                    <Cell>{user.lastLogin}</Cell>
+                  </tr>
+                );
+              })}
+            </Table>
+            {developers.length === 0 && <EmptyState title="No developers found for this view." />}
+          </Card>
+        </div>
+      );
+    }
 
     return (
       <div className="space-y-6">
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          <DashboardNavCard label="Total Projects" value={counts.totalProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "all", path: "/?section=projects" })} />
-          <DashboardNavCard label="Active Projects" value={counts.activeProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "active", path: "/?section=projects&status=active" })} />
-          <DashboardNavCard label="Completed Projects" value={counts.completedProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "completed", path: "/?section=projects&status=completed" })} />
-          <DashboardNavCard label="Total Tasks" value={counts.totalTasks} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "all", path: "/?section=tasks" })} />
-          <DashboardNavCard label="Pending Tasks" value={counts.pending} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "pending", path: "/?section=tasks&status=pending" })} />
-          <DashboardNavCard label="In Progress Tasks" value={counts.progress} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "in-progress", path: "/?section=tasks&status=in-progress" })} />
-          <DashboardNavCard label="Failed Tasks" value={counts.failed} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "failed", path: "/?section=tasks&status=failed" })} />
-          <DashboardNavCard label="Waiting for Approval Tasks" value={counts.waiting} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "waiting-for-approval", path: "/?section=tasks&status=waiting-for-approval" })} />
-          <DashboardNavCard label="Completed Tasks" value={counts.complete} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "complete", path: "/?section=tasks&status=complete" })} />
-          <DashboardNavCard label="Total Developers" value={counts.developers} onClick={() => openAdminDashboardTarget("developers", { path: "/?section=developers" })} />
+          <DashboardNavCard label="Total Projects" value={counts.totalProjects} onClick={() => setSelectedDashboardView({ kind: "projects", title: "All Projects", filter: "all" })} />
+          <DashboardNavCard label="Active Projects" value={counts.activeProjects} onClick={() => setSelectedDashboardView({ kind: "projects", title: "Active Projects", filter: "active" })} />
+          <DashboardNavCard label="Completed Projects" value={counts.completedProjects} onClick={() => setSelectedDashboardView({ kind: "projects", title: "Completed Projects", filter: "completed" })} />
+          <DashboardNavCard label="Total Tasks" value={counts.totalTasks} onClick={() => setSelectedDashboardView({ kind: "tasks", title: "All Tasks", filter: "all" })} />
+          <DashboardNavCard label="Pending Tasks" value={counts.pending} onClick={() => setSelectedDashboardView({ kind: "tasks", title: "Pending Tasks", filter: "pending" })} />
+          <DashboardNavCard label="In Progress Tasks" value={counts.progress} onClick={() => setSelectedDashboardView({ kind: "tasks", title: "In Progress Tasks", filter: "in-progress" })} />
+          <DashboardNavCard label="Failed Tasks" value={counts.failed} onClick={() => setSelectedDashboardView({ kind: "tasks", title: "Failed Tasks", filter: "failed" })} />
+          <DashboardNavCard label="Waiting for Approval Tasks" value={counts.waiting} onClick={() => setSelectedDashboardView({ kind: "tasks", title: "Waiting for Approval Tasks", filter: "waiting-for-approval" })} />
+          <DashboardNavCard label="Completed Tasks" value={counts.complete} onClick={() => setSelectedDashboardView({ kind: "tasks", title: "Completed Tasks", filter: "complete" })} />
+          <DashboardNavCard label="Total Developers" value={counts.developers} onClick={() => setSelectedDashboardView({ kind: "developers", title: "Developers" })} />
         </div>
 
-        <Card>
+        <Card className="border-[#BFDBFE] bg-white">
           <SectionTitle title="Recent Task Activity" />
           <Table headers={["Task Name", "Project", "Developer", "Status", "Last Updated"]}>
             {activeTasks.slice(0, 5).map((task) => (
@@ -1403,7 +1635,7 @@ export default function Home() {
           </Table>
         </Card>
 
-        <Card>
+        <Card className="border-[#BFDBFE] bg-white">
           <SectionTitle title="Recent Audit Logs" />
           <Table headers={["Action", "User", "Role", "Date & Time"]}>
             {auditLogs.slice(0, 5).map((log) => (
@@ -1417,7 +1649,7 @@ export default function Home() {
           </Table>
         </Card>
 
-        <Card>
+        <Card className="border-[#BFDBFE] bg-white">
           <SectionTitle title="Tasks Waiting for Approval" />
           <div className="grid gap-3">
             {waitingTasks.length === 0 && <EmptyState title="No tasks are waiting for approval." />}
@@ -1891,9 +2123,11 @@ export default function Home() {
             <Button variant="secondary" onClick={() => setModal({ name: "edit-developer", userId: user.id })}>
               Edit Developer
             </Button>
-            <Button variant="secondary" onClick={() => setModal({ name: "change-password", userId: user.id })}>
-              Change Password
-            </Button>
+            {user.role === "Developer" && (
+              <Button variant="secondary" onClick={() => setModal({ name: "change-password", userId: user.id })}>
+                Change Password
+              </Button>
+            )}
           </ActionGroup>
         </Cell>
       </tr>
@@ -2106,24 +2340,68 @@ export default function Home() {
   }
 
   function SettingsPage() {
+    const adminUser = users.find((user) => user.id === authUser.id) ?? authUser;
+
     return (
-      <div className="grid gap-6 xl:grid-cols-2">
-        <Card>
-          <SectionTitle title="Company Profile" />
-          <Info label="Company name" value="Key Pillar Ai" />
-          <Info label="App name" value="Audit Log & Task Tracking App" />
+      <div className="space-y-6">
+        <Card className="border-[#BFDBFE] bg-white">
+          <div className="flex items-center gap-4">
+            <img
+              src="/brand/keypillar-ai-logo.jpeg"
+              alt="Keypillar AI logo"
+              className="h-14 w-14 rounded-md object-cover"
+            />
+            <div>
+              <h2 className="text-xl font-semibold text-[#111827]">Keypillar AI</h2>
+              <p className="text-sm text-neutral-600">Audit Log &amp; Task Tracking App</p>
+            </div>
+          </div>
         </Card>
-        <Card>
-          <SectionTitle title="App Theme" />
-          <Badge className="border-black bg-white text-black">Black and white selected</Badge>
-        </Card>
-        <Card>
-          <SectionTitle title="Password Management Rules" />
-          <RuleList items={["Email and password login", "Developers cannot change passwords", "Admin can change passwords"]} />
-        </Card>
-        <Card>
-          <SectionTitle title="Task Status Rules" />
-          <RuleList items={statuses} />
+
+        <div className="grid gap-6 xl:grid-cols-2">
+          <Card className="border-[#BFDBFE] bg-white">
+            <SectionTitle title="Admin Account" />
+            <div className="mb-4 rounded-md border border-neutral-200 bg-neutral-50 p-4">
+              <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Current admin email</div>
+              <div className="mt-1 text-sm text-[#111827]">{adminUser.email}</div>
+            </div>
+            <form className="space-y-4" onSubmit={updateAdminPasswordFromSettings}>
+              <PasswordInput label="Current password" name="currentPassword" required />
+              <PasswordInput label="New password" name="password" required />
+              <PasswordInput label="Confirm new password" name="confirm" required />
+              {settingsPasswordMessage && (
+                <div
+                  className={`rounded-md border px-3 py-2 text-sm ${
+                    settingsPasswordMessage.type === "success"
+                      ? "border-[#BFDBFE] bg-[#EFF6FF] text-[#111827]"
+                      : "border-red-200 bg-red-50 text-red-700"
+                  }`}
+                >
+                  {settingsPasswordMessage.text}
+                </div>
+              )}
+              <Button type="submit">Update Password</Button>
+            </form>
+            <p className="mt-4 text-sm text-neutral-600">Only the admin password can be changed from Settings.</p>
+          </Card>
+        </div>
+
+        <Card className="border-[#BFDBFE] bg-white">
+          <SectionTitle title="App Info" />
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="rounded-md border border-neutral-200 bg-neutral-50 p-4">
+              <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Version</div>
+              <div className="mt-1 text-sm text-[#111827]">1.0.0</div>
+            </div>
+            <div className="rounded-md border border-neutral-200 bg-neutral-50 p-4">
+              <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Database</div>
+              <div className="mt-1 text-sm text-[#111827]">PostgreSQL</div>
+            </div>
+            <div className="rounded-md border border-neutral-200 bg-neutral-50 p-4">
+              <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Backend</div>
+              <div className="mt-1 text-sm text-[#111827]">Connected</div>
+            </div>
+          </div>
         </Card>
       </div>
     );
@@ -2131,14 +2409,14 @@ export default function Home() {
 
   function TaskListSection({ title, tasks }: { title: string; tasks: Task[] }) {
     return (
-      <Card>
+      <Card className="border-[#BFDBFE] bg-white">
         <SectionTitle title={title} />
         <div className="grid gap-3">
           {tasks.length === 0 && <EmptyState title="No tasks in this section." />}
           {tasks.map((task) => (
             <div
               key={task.id}
-              className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4 sm:flex-row sm:items-center sm:justify-between"
+              className="flex flex-col gap-3 rounded-md border border-[#BFDBFE] bg-[#EFF6FF] p-4 sm:flex-row sm:items-center sm:justify-between"
             >
               <div>
                 <div className="font-medium">{task.title}</div>
@@ -2410,7 +2688,7 @@ function DashboardNavCard({
     <button
       type="button"
       onClick={onClick}
-      className="rounded-md text-left transition hover:bg-neutral-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-black focus-visible:ring-offset-2"
+      className="group rounded-md text-left transition hover:-translate-y-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1D4ED8] focus-visible:ring-offset-2"
     >
       <StatCard label={label} value={value} />
     </button>
