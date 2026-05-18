@@ -250,6 +250,7 @@ export function updateUser(
 export function changeUserPassword(
   userId: string,
   body: {
+    currentPassword?: string;
     password: string;
     confirmPassword: string;
   }

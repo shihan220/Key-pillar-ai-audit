@@ -437,11 +437,15 @@ export default function Home() {
   const [isAppLoading, setIsAppLoading] = useState(false);
   const [showClockInPrompt, setShowClockInPrompt] = useState(false);
   const [clockOutPromptMode, setClockOutPromptMode] = useState<"clock-out" | "logout" | null>(null);
+  const [showLogoutPrompt, setShowLogoutPrompt] = useState(false);
   const [clockTick, setClockTick] = useState(() => Date.now());
   const [adminProjectDashboardFilter, setAdminProjectDashboardFilter] = useState<AdminProjectDashboardFilter>("all");
   const [adminTaskDashboardFilter, setAdminTaskDashboardFilter] = useState<AdminTaskDashboardFilter>("all");
   const [selectedDashboardView, setSelectedDashboardView] = useState<AdminDashboardView>(null);
   const [settingsPasswordMessage, setSettingsPasswordMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [settingsCurrentPassword, setSettingsCurrentPassword] = useState("");
+  const [settingsNewPassword, setSettingsNewPassword] = useState("");
+  const [settingsConfirmPassword, setSettingsConfirmPassword] = useState("");
   const [myTaskFilter, setMyTaskFilter] = useState<Status | "All">("All");
   const [auditFilters, setAuditFilters] = useState({
     user: "",
@@ -491,6 +495,7 @@ export default function Home() {
     setSelectedProjectId("");
     setShowClockInPrompt(false);
     setClockOutPromptMode(null);
+    setShowLogoutPrompt(false);
   };
 
   const applyAppState = (
@@ -728,11 +733,16 @@ export default function Home() {
   };
 
   const logout = async () => {
+    setShowLogoutPrompt(false);
     if (currentUser?.role === "Developer" && activeClockSession) {
       setClockOutPromptMode("logout");
       return;
     }
     await performLogout();
+  };
+
+  const requestLogout = () => {
+    setShowLogoutPrompt(true);
   };
 
   const navigate = (nextPage: Page) => {
@@ -982,28 +992,36 @@ export default function Home() {
     event.preventDefault();
     if (!currentUser || currentUser.role !== "Admin") return;
 
-    const form = new FormData(event.currentTarget);
-    const currentPassword = String(form.get("currentPassword") ?? "");
-    const password = String(form.get("password") ?? "");
-    const confirm = String(form.get("confirm") ?? "");
-
-    if (!currentPassword) {
+    if (!settingsCurrentPassword) {
       setSettingsPasswordMessage({ type: "error", text: "Current password is required." });
       return;
     }
 
-    if (password !== confirm) {
+    if (!settingsNewPassword) {
+      setSettingsPasswordMessage({ type: "error", text: "New password is required." });
+      return;
+    }
+
+    if (!settingsConfirmPassword) {
+      setSettingsPasswordMessage({ type: "error", text: "Confirm new password is required." });
+      return;
+    }
+
+    if (settingsNewPassword !== settingsConfirmPassword) {
       setSettingsPasswordMessage({ type: "error", text: "New password and confirm password must match." });
       return;
     }
 
     try {
       await changeUserPassword(currentUser.id, {
-        password,
-        confirmPassword: confirm
+        currentPassword: settingsCurrentPassword,
+        password: settingsNewPassword,
+        confirmPassword: settingsConfirmPassword
       });
       setSettingsPasswordMessage({ type: "success", text: "Admin password updated successfully." });
-      event.currentTarget.reset();
+      setSettingsCurrentPassword("");
+      setSettingsNewPassword("");
+      setSettingsConfirmPassword("");
     } catch (error) {
       setSettingsPasswordMessage({
         type: "error",
@@ -1140,6 +1158,7 @@ export default function Home() {
   const pageTitle =
     navItems.find(([key]) => key === page)?.[1] ??
     (page === "task-details" ? "Task Details" : page === "projects" ? "Projects" : "Dashboard");
+  const settingsAdminUser = users.find((user) => user.id === authUser.id) ?? authUser;
 
   return (
     <div className="min-h-screen bg-white text-black">
@@ -1174,7 +1193,7 @@ export default function Home() {
             </button>
           ))}
           <button
-            onClick={logout}
+            onClick={requestLogout}
             className="w-full rounded-md px-3 py-2 text-left text-sm font-medium text-black hover:bg-neutral-100"
           >
             Logout
@@ -1308,7 +1327,96 @@ export default function Home() {
           {page === "task-details" && selectedTask && <TaskDetailsPage task={selectedTask} />}
           {page === "developers" && <DevelopersPage />}
           {page === "audit-logs" && <AuditLogsPage />}
-          {page === "settings" && <SettingsPage />}
+          {page === "settings" && (
+            <div className="space-y-6">
+              <Card className="border-[#BFDBFE] bg-white">
+                <div className="flex items-center gap-4">
+                  <img
+                    src="/brand/keypillar-ai-logo.jpeg"
+                    alt="Keypillar AI logo"
+                    className="h-14 w-14 rounded-md object-cover"
+                  />
+                  <div>
+                    <h2 className="text-xl font-semibold text-[#111827]">Keypillar AI</h2>
+                    <p className="text-sm text-neutral-600">Audit Log &amp; Task Tracking App</p>
+                  </div>
+                </div>
+              </Card>
+
+              <div className="grid gap-6 xl:grid-cols-2">
+                <Card className="border-[#BFDBFE] bg-white">
+                  <SectionTitle title="Admin Account" />
+                  <div className="mb-4 rounded-md border border-neutral-200 bg-neutral-50 p-4">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Current admin email</div>
+                    <div className="mt-1 text-sm text-[#111827]">{settingsAdminUser.email}</div>
+                  </div>
+                  <form className="space-y-4" onSubmit={updateAdminPasswordFromSettings}>
+                    <PasswordInput
+                      label="Current password"
+                      name="currentPassword"
+                      value={settingsCurrentPassword}
+                      onChange={(event) => {
+                        setSettingsCurrentPassword(event.target.value);
+                        if (settingsPasswordMessage) setSettingsPasswordMessage(null);
+                      }}
+                      required
+                    />
+                    <PasswordInput
+                      label="New password"
+                      name="password"
+                      value={settingsNewPassword}
+                      onChange={(event) => {
+                        setSettingsNewPassword(event.target.value);
+                        if (settingsPasswordMessage) setSettingsPasswordMessage(null);
+                      }}
+                      required
+                    />
+                    <PasswordInput
+                      label="Confirm new password"
+                      name="confirm"
+                      value={settingsConfirmPassword}
+                      onChange={(event) => {
+                        setSettingsConfirmPassword(event.target.value);
+                        if (settingsPasswordMessage) setSettingsPasswordMessage(null);
+                      }}
+                      required
+                    />
+                    {settingsPasswordMessage && (
+                      <div
+                        className={`rounded-md border px-3 py-2 text-sm ${
+                          settingsPasswordMessage.type === "success"
+                            ? "border-[#BFDBFE] bg-[#EFF6FF] text-[#111827]"
+                            : "border-red-200 bg-red-50 text-red-700"
+                        }`}
+                      >
+                        {settingsPasswordMessage.text}
+                      </div>
+                    )}
+                    <Button type="submit">Update Password</Button>
+                  </form>
+                  <p className="mt-4 text-sm text-neutral-600">Only the admin password can be changed from Settings.</p>
+                </Card>
+              </div>
+
+              <Card className="border-[#BFDBFE] bg-white">
+                <SectionTitle title="App Info" />
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="rounded-md border border-neutral-200 bg-neutral-50 p-4">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Version</div>
+                    <div className="mt-1 text-sm text-[#111827]">1.0.0</div>
+                  </div>
+                  <div className="rounded-md border border-neutral-200 bg-neutral-50 p-4">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Database</div>
+                    <div className="mt-1 text-sm text-[#111827]">PostgreSQL</div>
+                  </div>
+                  <div className="rounded-md border border-neutral-200 bg-neutral-50 p-4">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Backend</div>
+                    <div className="mt-1 text-sm text-[#111827]">Connected</div>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          )}
         </main>
       </div>
 
@@ -1380,6 +1488,19 @@ export default function Home() {
                   </Button>
                 )}
               <Button onClick={() => setSelectedNotification(null)}>Close</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {showLogoutPrompt && (
+        <Modal title="Logout" onClose={() => setShowLogoutPrompt(false)} showCloseButton={false}>
+          <div className="space-y-6">
+            <p className="text-sm text-neutral-700">Do you want to log out ?</p>
+            <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
+              <Button onClick={logout}>Yes</Button>
+              <Button variant="secondary" onClick={() => setShowLogoutPrompt(false)}>
+                No
+              </Button>
             </div>
           </div>
         </Modal>
@@ -2086,7 +2207,7 @@ export default function Home() {
         </div>
         <Card>
           <Table headers={["Name", "Role", "Password", "Account Status", "Details", "Last Login", "Actions"]}>
-            {users.map((user) => (
+            {developers.map((user) => (
               <DeveloperRow key={user.id} user={user} />
             ))}
           </Table>
@@ -2334,74 +2455,6 @@ export default function Home() {
               </tr>
             ))}
           </Table>
-        </Card>
-      </div>
-    );
-  }
-
-  function SettingsPage() {
-    const adminUser = users.find((user) => user.id === authUser.id) ?? authUser;
-
-    return (
-      <div className="space-y-6">
-        <Card className="border-[#BFDBFE] bg-white">
-          <div className="flex items-center gap-4">
-            <img
-              src="/brand/keypillar-ai-logo.jpeg"
-              alt="Keypillar AI logo"
-              className="h-14 w-14 rounded-md object-cover"
-            />
-            <div>
-              <h2 className="text-xl font-semibold text-[#111827]">Keypillar AI</h2>
-              <p className="text-sm text-neutral-600">Audit Log &amp; Task Tracking App</p>
-            </div>
-          </div>
-        </Card>
-
-        <div className="grid gap-6 xl:grid-cols-2">
-          <Card className="border-[#BFDBFE] bg-white">
-            <SectionTitle title="Admin Account" />
-            <div className="mb-4 rounded-md border border-neutral-200 bg-neutral-50 p-4">
-              <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Current admin email</div>
-              <div className="mt-1 text-sm text-[#111827]">{adminUser.email}</div>
-            </div>
-            <form className="space-y-4" onSubmit={updateAdminPasswordFromSettings}>
-              <PasswordInput label="Current password" name="currentPassword" required />
-              <PasswordInput label="New password" name="password" required />
-              <PasswordInput label="Confirm new password" name="confirm" required />
-              {settingsPasswordMessage && (
-                <div
-                  className={`rounded-md border px-3 py-2 text-sm ${
-                    settingsPasswordMessage.type === "success"
-                      ? "border-[#BFDBFE] bg-[#EFF6FF] text-[#111827]"
-                      : "border-red-200 bg-red-50 text-red-700"
-                  }`}
-                >
-                  {settingsPasswordMessage.text}
-                </div>
-              )}
-              <Button type="submit">Update Password</Button>
-            </form>
-            <p className="mt-4 text-sm text-neutral-600">Only the admin password can be changed from Settings.</p>
-          </Card>
-        </div>
-
-        <Card className="border-[#BFDBFE] bg-white">
-          <SectionTitle title="App Info" />
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div className="rounded-md border border-neutral-200 bg-neutral-50 p-4">
-              <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Version</div>
-              <div className="mt-1 text-sm text-[#111827]">1.0.0</div>
-            </div>
-            <div className="rounded-md border border-neutral-200 bg-neutral-50 p-4">
-              <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Database</div>
-              <div className="mt-1 text-sm text-[#111827]">PostgreSQL</div>
-            </div>
-            <div className="rounded-md border border-neutral-200 bg-neutral-50 p-4">
-              <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Backend</div>
-              <div className="mt-1 text-sm text-[#111827]">Connected</div>
-            </div>
-          </div>
         </Card>
       </div>
     );

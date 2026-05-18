@@ -1,4 +1,3 @@
-import bcrypt from 'bcrypt';
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { AccountStatus } from '@prisma/client';
@@ -6,6 +5,7 @@ import { mapUser } from '../common/frontend-mappers';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthenticatedUser, AuthTokenPayload } from './auth-user';
 import { LoginDto } from './dto/login.dto';
+import { verifyPassword } from './password.utils';
 
 @Injectable()
 export class AuthService {
@@ -25,7 +25,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email, password, or inactive account.');
     }
 
-    const matches = await bcrypt.compare(body.password, user.passwordHash);
+    const matches = await verifyPassword(body.password, user.passwordHash);
     if (!matches) {
       throw new UnauthorizedException('Invalid email, password, or inactive account.');
     }
