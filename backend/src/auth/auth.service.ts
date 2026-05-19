@@ -31,26 +31,36 @@ export class AuthService {
     }
 
     const now = new Date();
-    const updatedUser = await this.prisma.user.update({
-      where: { id: user.id },
-      data: { lastLoginAt: now },
-    });
+    let sessionUser = user;
 
-    await this.prisma.auditLog.create({
-      data: {
-        actorId: updatedUser.id,
-        actorName: updatedUser.name,
-        actorRole: updatedUser.role,
-        action: 'User logged in',
-        entityType: 'User',
-        entityId: updatedUser.id,
-        entityName: updatedUser.name,
-      },
-    });
+    try {
+      sessionUser = await this.prisma.user.update({
+        where: { id: user.id },
+        data: { lastLoginAt: now },
+      });
+    } catch (error) {
+      console.error('[auth.login] Failed to update last login timestamp.', error);
+    }
+
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          actorId: sessionUser.id,
+          actorName: sessionUser.name,
+          actorRole: sessionUser.role,
+          action: 'User logged in',
+          entityType: 'User',
+          entityId: sessionUser.id,
+          entityName: sessionUser.name,
+        },
+      });
+    } catch (error) {
+      console.error('[auth.login] Failed to record login audit log.', error);
+    }
 
     return {
-      user: mapUser(updatedUser),
-      accessToken: await this.signToken(updatedUser.id, updatedUser.email, updatedUser.role),
+      user: mapUser(sessionUser),
+      accessToken: await this.signToken(sessionUser.id, sessionUser.email, sessionUser.role),
     };
   }
 

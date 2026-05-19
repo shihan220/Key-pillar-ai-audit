@@ -22,6 +22,7 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const allowedOrigins = Array.from(
     new Set([
+      normalizeOrigin('https://key-pillar-ai-audit.vercel.app'),
       normalizeOrigin('http://localhost:3000'),
       normalizeOrigin('http://127.0.0.1:3000'),
       ...(process.env.FRONTEND_ORIGIN
