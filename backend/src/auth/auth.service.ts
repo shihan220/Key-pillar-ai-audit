@@ -5,7 +5,7 @@ import { mapUser } from '../common/frontend-mappers';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthenticatedUser, AuthTokenPayload } from './auth-user';
 import { LoginDto } from './dto/login.dto';
-import { verifyPassword } from './password.utils';
+import { hashPassword, isBcryptHash, verifyPassword } from './password.utils';
 
 @Injectable()
 export class AuthService {
@@ -34,9 +34,17 @@ export class AuthService {
     let sessionUser = user;
 
     try {
+      const updateData: { lastLoginAt: Date; passwordHash?: string } = {
+        lastLoginAt: now,
+      };
+
+      if (!isBcryptHash(user.passwordHash)) {
+        updateData.passwordHash = await hashPassword(body.password);
+      }
+
       sessionUser = await this.prisma.user.update({
         where: { id: user.id },
-        data: { lastLoginAt: now },
+        data: updateData,
       });
     } catch (error) {
       console.error('[auth.login] Failed to update last login timestamp.', error);
