@@ -14,14 +14,18 @@ for (const candidate of envCandidates) {
   }
 }
 
+function normalizeOrigin(origin: string) {
+  return origin.trim().replace(/\/+$/, '');
+}
+
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const allowedOrigins = Array.from(
     new Set([
-      'http://localhost:3000',
-      'http://127.0.0.1:3000',
+      normalizeOrigin('http://localhost:3000'),
+      normalizeOrigin('http://127.0.0.1:3000'),
       ...(process.env.FRONTEND_ORIGIN
-        ? process.env.FRONTEND_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean)
+        ? process.env.FRONTEND_ORIGIN.split(',').map(normalizeOrigin).filter(Boolean)
         : []),
     ]),
   );
@@ -41,6 +45,7 @@ async function bootstrap() {
   });
   const port = Number(process.env.PORT ?? process.env.BACKEND_PORT ?? 4000);
   const host = process.env.BACKEND_HOST ?? '0.0.0.0';
+  console.log(`[bootstrap] Allowed CORS origins: ${allowedOrigins.join(', ')}`);
   await app.listen(port, host);
 }
 bootstrap();
