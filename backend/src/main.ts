@@ -16,10 +16,14 @@ for (const candidate of envCandidates) {
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
-  const allowedOrigins = (
-    process.env.FRONTEND_ORIGIN
-      ? process.env.FRONTEND_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean)
-      : ['http://localhost:3000', 'http://127.0.0.1:3000']
+  const allowedOrigins = Array.from(
+    new Set([
+      'http://localhost:3000',
+      'http://127.0.0.1:3000',
+      ...(process.env.FRONTEND_ORIGIN
+        ? process.env.FRONTEND_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean)
+        : []),
+    ]),
   );
   app.enableCors({
     origin: allowedOrigins,
