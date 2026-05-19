@@ -35,9 +35,8 @@ async function bootstrap() {
   app.useStaticAssets(resolve(process.cwd(), 'uploads'), {
     prefix: '/uploads/',
   });
-  const port = process.env.BACKEND_PORT ?? process.env.PORT ?? 4000;
-  const host = process.env.BACKEND_HOST ?? 'localhost';
-  const listenHost = host === 'localhost' ? '0.0.0.0' : host;
-  await app.listen(port, listenHost);
+  const port = Number(process.env.PORT ?? process.env.BACKEND_PORT ?? 4000);
+  const host = process.env.BACKEND_HOST ?? '0.0.0.0';
+  await app.listen(port, host);
 }
 bootstrap();
