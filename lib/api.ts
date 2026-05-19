@@ -1,6 +1,13 @@
 import { AuditLog, ClockSession, Comment, HistoryItem, Notification, Project, Task, User } from "./types";
 
-const REQUIRED_API_BASE_URL: string = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:4000";
+const configuredApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
+const isProduction = process.env.NODE_ENV === "production";
+
+if (isProduction && !configuredApiBaseUrl) {
+  throw new Error("API base URL is not configured.");
+}
+
+const REQUIRED_API_BASE_URL: string = configuredApiBaseUrl || "http://localhost:4000";
 
 const AUTH_TOKEN_KEY = "key-pillar-auth-token";
 const AUTH_USER_KEY = "key-pillar-auth-user";
@@ -75,9 +82,7 @@ async function request<T>(path: string, method = "GET", body?: RequestBody): Pro
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown network error";
-    throw new Error(
-      `Network request failed for ${url}. Check NEXT_PUBLIC_API_BASE_URL=http://localhost:4000 and make sure the backend is running. ${message}`
-    );
+    throw new Error(`Network request failed. Check the frontend API base URL and backend availability. ${message}`);
   }
 
   if (!response.ok) {
