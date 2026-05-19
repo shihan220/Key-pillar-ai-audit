@@ -25,7 +25,13 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email, password, or inactive account.');
     }
 
-    const matches = await verifyPassword(body.password, user.passwordHash);
+    let matches = false;
+    try {
+      matches = await verifyPassword(body.password, user.passwordHash);
+    } catch (error) {
+      console.error('[auth.login] Password verification failed.', error);
+      matches = false;
+    }
     if (!matches) {
       throw new UnauthorizedException('Invalid email, password, or inactive account.');
     }
