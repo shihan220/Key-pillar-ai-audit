@@ -28,6 +28,7 @@ import {
   createProject as apiCreateProject,
   createTask as apiCreateTask,
   createUser as apiCreateUser,
+  deleteUserAccount as apiDeleteUserAccount,
   deleteProject as apiDeleteProject,
   deleteTask as apiDeleteTask,
   fetchAppState,
@@ -419,6 +420,7 @@ export default function Home() {
   const [modal, setModal] = useState<ModalState>(null);
   const [deleteTaskId, setDeleteTaskId] = useState<string | null>(null);
   const [deleteProjectId, setDeleteProjectId] = useState<string | null>(null);
+  const [deleteUserId, setDeleteUserId] = useState<string | null>(null);
   const [approveTaskId, setApproveTaskId] = useState<string | null>(null);
   const [loginHistoryUserId, setLoginHistoryUserId] = useState<string | null>(null);
   const [historyModalTab, setHistoryModalTab] = useState<"login" | "work">("login");
@@ -469,6 +471,7 @@ export default function Home() {
     setActiveClockSession(null);
     setSelectedTaskId("");
     setSelectedProjectId("");
+    setDeleteUserId(null);
     setShowClockInPrompt(false);
     setClockOutPromptMode(null);
   };
@@ -933,16 +936,37 @@ export default function Home() {
     if (!currentUser) return;
     try {
       const form = new FormData(event.currentTarget);
+      const accountStatus = String(form.get("accountStatus"));
+      if (accountStatus === "Delete Account") {
+        if (currentUser.id === userId) {
+          window.alert("You cannot delete your own account.");
+          return;
+        }
+        setModal(null);
+        setDeleteUserId(userId);
+        return;
+      }
       await apiUpdateUser(userId, {
         name: String(form.get("name")),
         email: String(form.get("email")),
         role: form.get("role") as Role,
-        accountStatus: form.get("accountStatus") as User["accountStatus"]
+        accountStatus: accountStatus as User["accountStatus"]
       });
       await refreshState(currentUser.id);
       setModal(null);
     } catch (error) {
       showActionError(error, "Failed to update user.");
+    }
+  };
+
+  const deleteUser = async (userId: string) => {
+    if (!currentUser) return;
+    try {
+      await apiDeleteUserAccount(userId);
+      await refreshState(currentUser.id);
+      setDeleteUserId(null);
+    } catch (error) {
+      showActionError(error, "Failed to delete account.");
     }
   };
 
@@ -1305,6 +1329,16 @@ export default function Home() {
           confirmLabel="Yes, continue"
           onCancel={() => setDeleteProjectId(null)}
           onConfirm={() => deleteProject(deleteProjectId)}
+        />
+      )}
+      {deleteUserId && (
+        <ConfirmDialog
+          title="Delete Account"
+          message="Are you sure you want to delete this account?"
+          confirmLabel="Delete Account"
+          cancelLabel="Cancel"
+          onCancel={() => setDeleteUserId(null)}
+          onConfirm={() => deleteUser(deleteUserId)}
         />
       )}
       {approveTaskId && (
@@ -2384,6 +2418,10 @@ export default function Home() {
     onSubmit: (event: FormEvent<HTMLFormElement>) => void;
     onClose: () => void;
   }) {
+    const [accountStatus, setAccountStatus] = useState<"Active" | "Inactive" | "Delete Account">(
+      user?.accountStatus ?? "Active"
+    );
+
     return (
       <Modal title={title} onClose={onClose} showCloseButton={false}>
         <form className="space-y-4" onSubmit={onSubmit}>
@@ -2394,10 +2432,23 @@ export default function Home() {
             <option>Developer</option>
             <option>Admin</option>
           </Select>
-          <Select label="Account status" name="accountStatus" defaultValue={user?.accountStatus ?? "Active"}>
+          <Select
+            label="Account status"
+            name="accountStatus"
+            value={accountStatus}
+            onChange={(event) =>
+              setAccountStatus(event.target.value as "Active" | "Inactive" | "Delete Account")
+            }
+          >
             <option>Active</option>
             <option>Inactive</option>
+            {user && currentUser?.id !== user.id && <option>Delete Account</option>}
           </Select>
+          {accountStatus === "Delete Account" && (
+            <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              This option will deactivate the account after confirmation.
+            </p>
+          )}
           <FormActions onCancel={onClose} />
         </form>
       </Modal>

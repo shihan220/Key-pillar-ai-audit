@@ -30,7 +30,7 @@ export class UsersService {
         actorId: user.id,
         actorName: user.name,
         actorRole: user.role,
-        action: 'Developer account created',
+        action: 'User account created',
         entityType: 'User',
         entityId: createdUser.id,
         entityName: createdUser.name,
@@ -68,7 +68,7 @@ export class UsersService {
         actorId: user.id,
         actorName: user.name,
         actorRole: user.role,
-        action: 'Developer account edited',
+        action: 'User account edited',
         entityType: 'User',
         entityId: updated.id,
         entityName: updated.name,
@@ -102,10 +102,45 @@ export class UsersService {
         actorId: user.id,
         actorName: user.name,
         actorRole: user.role,
-        action: 'Developer password changed by admin',
+        action: 'User password changed by admin',
         entityType: 'User',
         entityId: targetUser.id,
         entityName: targetUser.name,
+      },
+    });
+
+    return { success: true };
+  }
+
+  async deleteUser(userId: string, user: AuthenticatedUser) {
+    this.requireAdmin(user);
+
+    if (user.id === userId) {
+      throw new ForbiddenException('You cannot delete your own account.');
+    }
+
+    const existingUser = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!existingUser) {
+      throw new NotFoundException('User not found.');
+    }
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        accountStatus: AccountStatus.INACTIVE,
+        deactivatedAt: new Date(),
+      },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: user.id,
+        actorName: user.name,
+        actorRole: user.role,
+        action: 'User account deleted',
+        entityType: 'User',
+        entityId: existingUser.id,
+        entityName: existingUser.name,
       },
     });
 

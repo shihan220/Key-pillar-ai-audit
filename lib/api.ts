@@ -247,6 +247,10 @@ export function updateUser(
   return request<{ success: boolean }>(`/users/${userId}`, "PATCH", body);
 }
 
+export function deleteUserAccount(userId: string) {
+  return request<{ success: boolean }>(`/users/${userId}`, "DELETE");
+}
+
 export function changeUserPassword(
   userId: string,
   body: {

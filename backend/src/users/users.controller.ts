@@ -1,4 +1,4 @@
-import { Body, Controller, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { CurrentUser } from '../auth/current-user.decorator';
 import type { AuthenticatedUser } from '../auth/auth-user';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -23,5 +23,10 @@ export class UsersController {
   @Post(':id/change-password')
   changePassword(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser, @Body() body: ChangePasswordDto) {
     return this.usersService.changePassword(id, user, body);
+  }
+
+  @Delete(':id')
+  deleteUser(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.usersService.deleteUser(id, user);
   }
 }
