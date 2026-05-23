@@ -28,6 +28,7 @@ import {
   createProject as apiCreateProject,
   createTask as apiCreateTask,
   createUser as apiCreateUser,
+  deleteUserAccount as apiDeleteUserAccount,
   deleteProject as apiDeleteProject,
   deleteTask as apiDeleteTask,
   fetchAppState,
@@ -70,7 +71,8 @@ type Page =
   | "task-details"
   | "developers"
   | "audit-logs"
-  | "settings";
+  | "settings"
+  | "help";
 
 type ModalState =
   | { name: "create-project" }
@@ -476,6 +478,7 @@ export default function Home() {
   const [modal, setModal] = useState<ModalState>(null);
   const [deleteTaskId, setDeleteTaskId] = useState<string | null>(null);
   const [deleteProjectId, setDeleteProjectId] = useState<string | null>(null);
+  const [deleteUserId, setDeleteUserId] = useState<string | null>(null);
   const [approveTaskId, setApproveTaskId] = useState<string | null>(null);
   const [loginHistoryUserId, setLoginHistoryUserId] = useState<string | null>(null);
   const [historyModalTab, setHistoryModalTab] = useState<"login" | "work">("login");
@@ -551,6 +554,7 @@ export default function Home() {
     setActiveClockSession(null);
     setSelectedTaskId("");
     setSelectedProjectId("");
+    setDeleteUserId(null);
     setShowClockInPrompt(false);
     setClockOutPromptMode(null);
     setShowLogoutPrompt(false);
@@ -846,7 +850,7 @@ export default function Home() {
   const navigate = (nextPage: Page) => {
     if (!currentUser) return;
     const adminOnly: Page[] = ["admin-dashboard", "projects", "tasks", "developers", "audit-logs", "settings"];
-    const developerOnly: Page[] = ["developer-dashboard", "my-tasks"];
+    const developerOnly: Page[] = ["developer-dashboard", "my-tasks", "help"];
     if (currentUser.role === "Developer" && adminOnly.includes(nextPage)) return;
     if (currentUser.role === "Admin" && developerOnly.includes(nextPage)) return;
     setSelectedDashboardView(null);
@@ -1079,7 +1083,7 @@ export default function Home() {
       await refreshState(currentUser.id);
       setModal(null);
     } catch (error) {
-      showActionError(error, "Failed to create developer.");
+      showActionError(error, "Failed to create user.");
     }
   };
 
@@ -1088,16 +1092,37 @@ export default function Home() {
     if (!currentUser) return;
     try {
       const form = new FormData(event.currentTarget);
+      const accountStatus = String(form.get("accountStatus"));
+      if (accountStatus === "Delete Account") {
+        if (currentUser.id === userId) {
+          window.alert("You cannot delete your own account.");
+          return;
+        }
+        setModal(null);
+        setDeleteUserId(userId);
+        return;
+      }
       await apiUpdateUser(userId, {
         name: String(form.get("name")),
         email: String(form.get("email")),
         role: form.get("role") as Role,
-        accountStatus: form.get("accountStatus") as User["accountStatus"]
+        accountStatus: accountStatus as User["accountStatus"]
       });
       await refreshState(currentUser.id);
       setModal(null);
     } catch (error) {
-      showActionError(error, "Failed to update developer.");
+      showActionError(error, "Failed to update user.");
+    }
+  };
+
+  const deleteUser = async (userId: string) => {
+    if (!currentUser) return;
+    try {
+      await apiDeleteUserAccount(userId);
+      await refreshState(currentUser.id);
+      setDeleteUserId(null);
+    } catch (error) {
+      showActionError(error, "Failed to delete account.");
     }
   };
 
@@ -1213,6 +1238,7 @@ export default function Home() {
   const openNotification = async (notification: Notification) => {
     const nextNotification = notification.isRead ? notification : { ...notification, isRead: true };
     setSelectedNotification(nextNotification);
+    setNotificationsOpen(false);
 
     if (notification.isRead) return;
 
@@ -1287,7 +1313,8 @@ export default function Home() {
         ]
       : [
           ["developer-dashboard", "My Dashboard"],
-          ["my-tasks", "My Tasks"]
+          ["my-tasks", "My Tasks"],
+          ["help", "Help"]
         ];
 
   const pageTitle =
@@ -1420,6 +1447,52 @@ export default function Home() {
                 </Button>
               )
             )}
+            <div className="relative">
+              <button
+                type="button"
+                aria-label="Notifications"
+                onClick={() => setNotificationsOpen((current) => !current)}
+                className="relative inline-flex h-10 w-10 items-center justify-center rounded-md border border-neutral-300 bg-white text-lg text-black transition hover:bg-neutral-100"
+              >
+                <span aria-hidden="true">🔔</span>
+                {notificationUnreadCount > 0 && (
+                  <span className="absolute -right-1 -top-1 inline-flex min-h-5 min-w-5 items-center justify-center rounded-full bg-black px-1.5 text-[11px] font-semibold text-white">
+                    {notificationUnreadCount > 99 ? "99+" : notificationUnreadCount}
+                  </span>
+                )}
+              </button>
+              {notificationsOpen && (
+                <div className="absolute right-0 top-12 z-30 w-80 rounded-md border border-neutral-200 bg-white p-2 shadow-lg">
+                  <div className="border-b border-neutral-200 px-2 pb-2 pt-1 text-sm font-semibold text-black">
+                    Notifications
+                  </div>
+                  <div className="max-h-96 overflow-y-auto py-2">
+                    {notifications.length === 0 ? (
+                      <div className="px-2 py-4 text-sm text-neutral-600">No notifications yet.</div>
+                    ) : (
+                      notifications.map((notification) => (
+                        <button
+                          key={notification.id}
+                          type="button"
+                          onClick={() => {
+                            void openNotification(notification);
+                          }}
+                          className={`w-full rounded-md px-2 py-3 text-left transition hover:bg-neutral-100 ${
+                            notification.isRead ? "bg-white" : "bg-neutral-50"
+                          }`}
+                        >
+                          <div className="text-sm font-semibold text-black">{notification.title}</div>
+                          <div className="mt-1 text-sm text-neutral-700">{notification.message}</div>
+                          <div className="mt-2 text-xs text-neutral-500">
+                            {notification.entityType} · {formatNotificationDateTime(notification.createdAt)}
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
             <div className="text-right text-sm">
               <div className="font-medium">{authUser.name}</div>
               <div className="text-neutral-600">{authUser.role}</div>
@@ -1559,6 +1632,7 @@ export default function Home() {
               </Card>
             </div>
           )}
+          {page === "help" && <HelpPage />}
         </main>
       </div>
 
@@ -1627,11 +1701,11 @@ export default function Home() {
         </Modal>
       )}
       {modal?.name === "create-developer" && (
-        <DeveloperForm title="Create Developer" onSubmit={createDeveloper} onClose={() => setModal(null)} />
+        <DeveloperForm title="Create User" onSubmit={createDeveloper} onClose={() => setModal(null)} />
       )}
       {modal?.name === "edit-developer" && (
         <DeveloperForm
-          title="Edit Developer"
+          title="Edit User"
           user={users.find((item) => item.id === modal.userId)}
           onSubmit={(event) => editDeveloper(event, modal.userId)}
           onClose={() => setModal(null)}
@@ -1697,6 +1771,16 @@ export default function Home() {
           confirmLabel="Yes, continue"
           onCancel={() => setDeleteProjectId(null)}
           onConfirm={() => deleteProject(deleteProjectId)}
+        />
+      )}
+      {deleteUserId && (
+        <ConfirmDialog
+          title="Delete Account"
+          message="Are you sure you want to delete this account?"
+          confirmLabel="Delete Account"
+          cancelLabel="Cancel"
+          onCancel={() => setDeleteUserId(null)}
+          onConfirm={() => deleteUser(deleteUserId)}
         />
       )}
       {approveTaskId && (
@@ -2538,7 +2622,7 @@ export default function Home() {
       <div className="space-y-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-xl font-semibold">Developers</h2>
-          <Button onClick={() => setModal({ name: "create-developer" })}>Create Developer</Button>
+          <Button onClick={() => setModal({ name: "create-developer" })}>Create User</Button>
         </div>
         <Card>
           <Table headers={["Name", "Role", "Password", "Account Status", "Details", "Last Login", "Actions"]}>
@@ -2577,7 +2661,7 @@ export default function Home() {
         <Cell>
           <ActionGroup>
             <Button variant="secondary" onClick={() => setModal({ name: "edit-developer", userId: user.id })}>
-              Edit Developer
+              Edit User
             </Button>
             {user.role === "Developer" && (
               <Button variant="secondary" onClick={() => setModal({ name: "change-password", userId: user.id })}>
@@ -2609,6 +2693,40 @@ export default function Home() {
         >
           View History
         </Button>
+      </div>
+    );
+  }
+
+  function HelpPage() {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h2 className="text-xl font-semibold">Help</h2>
+          <p className="mt-2 text-sm text-neutral-700">Support information for developers.</p>
+        </div>
+        <Card className="max-w-3xl space-y-4 p-6">
+          <div className="space-y-4 text-sm leading-7 text-neutral-800">
+            <p>Need help using the app?</p>
+            <p>
+              If you face any issue while using the task panel, uploading files, updating task status,
+              clocking in or clocking out, please contact support. You can also reach out if you do not
+              understand how to use any feature inside the app.
+            </p>
+            <p>
+              When contacting support, briefly explain the issue and include any useful details, such as
+              the task name, project name, or the action you were trying to complete.
+            </p>
+          </div>
+          <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-3">
+            <div className="text-sm font-medium text-black">Contact email</div>
+            <a
+              href="mailto:mohammad.shihan@outlook.com"
+              className="mt-1 inline-block text-sm font-medium text-black underline underline-offset-4"
+            >
+              mohammad.shihan@outlook.com
+            </a>
+          </div>
+        </Card>
       </div>
     );
   }
@@ -3012,20 +3130,37 @@ export default function Home() {
     onSubmit: (event: FormEvent<HTMLFormElement>) => void;
     onClose: () => void;
   }) {
+    const [accountStatus, setAccountStatus] = useState<"Active" | "Inactive" | "Delete Account">(
+      user?.accountStatus ?? "Active"
+    );
+
     return (
       <Modal title={title} onClose={onClose} showCloseButton={false}>
         <form className="space-y-4" onSubmit={onSubmit}>
-          <Input label="Developer name" name="name" defaultValue={user?.name} required />
+          <Input label="Name" name="name" defaultValue={user?.name} required />
           <Input label="Email" name="email" type="email" defaultValue={user?.email} required />
           {!user && <PasswordInput label="Password" name="password" required />}
           <Select label="Role" name="role" defaultValue={user?.role ?? "Developer"}>
             <option>Developer</option>
             <option>Admin</option>
           </Select>
-          <Select label="Account status" name="accountStatus" defaultValue={user?.accountStatus ?? "Active"}>
+          <Select
+            label="Account status"
+            name="accountStatus"
+            value={accountStatus}
+            onChange={(event) =>
+              setAccountStatus(event.target.value as "Active" | "Inactive" | "Delete Account")
+            }
+          >
             <option>Active</option>
             <option>Inactive</option>
+            {user && currentUser?.id !== user.id && <option>Delete Account</option>}
           </Select>
+          {accountStatus === "Delete Account" && (
+            <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              This option will deactivate the account after confirmation.
+            </p>
+          )}
           <FormActions onCancel={onClose} />
         </form>
       </Modal>
@@ -3044,7 +3179,7 @@ export default function Home() {
     return (
       <Modal title="Change Password" onClose={onClose} showCloseButton={false}>
         <form className="space-y-4" onSubmit={onSubmit}>
-          <Input label="Developer name" value={user?.name ?? ""} readOnly />
+          <Input label="Name" value={user?.name ?? ""} readOnly />
           <PasswordInput label="New password" name="password" required />
           <PasswordInput label="Confirm password" name="confirm" required />
           <FormActions onCancel={onClose} saveLabel="Save" />

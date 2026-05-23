@@ -23,6 +23,7 @@ function parseDate(date: string) {
 }
 
 async function main() {
+  await prisma.notification.deleteMany();
   await prisma.auditLog.deleteMany();
   await prisma.taskHistory.deleteMany();
   await prisma.taskComment.deleteMany();
