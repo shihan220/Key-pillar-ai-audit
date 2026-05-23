@@ -411,6 +411,7 @@ export default function Home() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
   const [selectedNotification, setSelectedNotification] = useState<Notification | null>(null);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [activeClockSession, setActiveClockSession] = useState<ClockSession | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [page, setPage] = useState<Page>("admin-dashboard");
@@ -1040,6 +1041,7 @@ export default function Home() {
   const openNotification = async (notification: Notification) => {
     const nextNotification = notification.isRead ? notification : { ...notification, isRead: true };
     setSelectedNotification(nextNotification);
+    setNotificationsOpen(false);
 
     if (notification.isRead) return;
 
@@ -1195,6 +1197,52 @@ export default function Home() {
                 </Button>
               )
             )}
+            <div className="relative">
+              <button
+                type="button"
+                aria-label="Notifications"
+                onClick={() => setNotificationsOpen((current) => !current)}
+                className="relative inline-flex h-10 w-10 items-center justify-center rounded-md border border-neutral-300 bg-white text-lg text-black transition hover:bg-neutral-100"
+              >
+                <span aria-hidden="true">🔔</span>
+                {notificationUnreadCount > 0 && (
+                  <span className="absolute -right-1 -top-1 inline-flex min-h-5 min-w-5 items-center justify-center rounded-full bg-black px-1.5 text-[11px] font-semibold text-white">
+                    {notificationUnreadCount > 99 ? "99+" : notificationUnreadCount}
+                  </span>
+                )}
+              </button>
+              {notificationsOpen && (
+                <div className="absolute right-0 top-12 z-30 w-80 rounded-md border border-neutral-200 bg-white p-2 shadow-lg">
+                  <div className="border-b border-neutral-200 px-2 pb-2 pt-1 text-sm font-semibold text-black">
+                    Notifications
+                  </div>
+                  <div className="max-h-96 overflow-y-auto py-2">
+                    {notifications.length === 0 ? (
+                      <div className="px-2 py-4 text-sm text-neutral-600">No notifications yet.</div>
+                    ) : (
+                      notifications.map((notification) => (
+                        <button
+                          key={notification.id}
+                          type="button"
+                          onClick={() => {
+                            void openNotification(notification);
+                          }}
+                          className={`w-full rounded-md px-2 py-3 text-left transition hover:bg-neutral-100 ${
+                            notification.isRead ? "bg-white" : "bg-neutral-50"
+                          }`}
+                        >
+                          <div className="text-sm font-semibold text-black">{notification.title}</div>
+                          <div className="mt-1 text-sm text-neutral-700">{notification.message}</div>
+                          <div className="mt-2 text-xs text-neutral-500">
+                            {notification.entityType} · {formatNotificationDateTime(notification.createdAt)}
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
             <div className="text-right text-sm">
               <div className="font-medium">{authUser.name}</div>
               <div className="text-neutral-600">{authUser.role}</div>
