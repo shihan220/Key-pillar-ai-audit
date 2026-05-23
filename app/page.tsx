@@ -68,7 +68,8 @@ type Page =
   | "task-details"
   | "developers"
   | "audit-logs"
-  | "settings";
+  | "settings"
+  | "help";
 
 type ModalState =
   | { name: "create-project" }
@@ -716,7 +717,7 @@ export default function Home() {
   const navigate = (nextPage: Page) => {
     if (!currentUser) return;
     const adminOnly: Page[] = ["admin-dashboard", "projects", "tasks", "developers", "audit-logs", "settings"];
-    const developerOnly: Page[] = ["developer-dashboard", "my-tasks"];
+    const developerOnly: Page[] = ["developer-dashboard", "my-tasks", "help"];
     if (currentUser.role === "Developer" && adminOnly.includes(nextPage)) return;
     if (currentUser.role === "Admin" && developerOnly.includes(nextPage)) return;
     setPage(nextPage);
@@ -923,7 +924,7 @@ export default function Home() {
       await refreshState(currentUser.id);
       setModal(null);
     } catch (error) {
-      showActionError(error, "Failed to create developer.");
+      showActionError(error, "Failed to create user.");
     }
   };
 
@@ -941,7 +942,7 @@ export default function Home() {
       await refreshState(currentUser.id);
       setModal(null);
     } catch (error) {
-      showActionError(error, "Failed to update developer.");
+      showActionError(error, "Failed to update user.");
     }
   };
 
@@ -1088,7 +1089,8 @@ export default function Home() {
         ]
       : [
           ["developer-dashboard", "My Dashboard"],
-          ["my-tasks", "My Tasks"]
+          ["my-tasks", "My Tasks"],
+          ["help", "Help"]
         ];
 
   const pageTitle =
@@ -1212,6 +1214,7 @@ export default function Home() {
           {page === "developers" && <DevelopersPage />}
           {page === "audit-logs" && <AuditLogsPage />}
           {page === "settings" && <SettingsPage />}
+          {page === "help" && <HelpPage />}
         </main>
       </div>
 
@@ -1245,11 +1248,11 @@ export default function Home() {
         />
       )}
       {modal?.name === "create-developer" && (
-        <DeveloperForm title="Create Developer" onSubmit={createDeveloper} onClose={() => setModal(null)} />
+        <DeveloperForm title="Create User" onSubmit={createDeveloper} onClose={() => setModal(null)} />
       )}
       {modal?.name === "edit-developer" && (
         <DeveloperForm
-          title="Edit Developer"
+          title="Edit User"
           user={users.find((item) => item.id === modal.userId)}
           onSubmit={(event) => editDeveloper(event, modal.userId)}
           onClose={() => setModal(null)}
@@ -1850,7 +1853,7 @@ export default function Home() {
       <div className="space-y-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-xl font-semibold">Developers</h2>
-          <Button onClick={() => setModal({ name: "create-developer" })}>Create Developer</Button>
+          <Button onClick={() => setModal({ name: "create-developer" })}>Create User</Button>
         </div>
         <Card>
           <Table headers={["Name", "Role", "Password", "Account Status", "Details", "Last Login", "Actions"]}>
@@ -1889,7 +1892,7 @@ export default function Home() {
         <Cell>
           <ActionGroup>
             <Button variant="secondary" onClick={() => setModal({ name: "edit-developer", userId: user.id })}>
-              Edit Developer
+              Edit User
             </Button>
             <Button variant="secondary" onClick={() => setModal({ name: "change-password", userId: user.id })}>
               Change Password
@@ -1919,6 +1922,40 @@ export default function Home() {
         >
           View History
         </Button>
+      </div>
+    );
+  }
+
+  function HelpPage() {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h2 className="text-xl font-semibold">Help</h2>
+          <p className="mt-2 text-sm text-neutral-700">Support information for developers.</p>
+        </div>
+        <Card className="max-w-3xl space-y-4 p-6">
+          <div className="space-y-4 text-sm leading-7 text-neutral-800">
+            <p>Need help using the app?</p>
+            <p>
+              If you face any issue while using the task panel, uploading files, updating task status,
+              clocking in or clocking out, please contact support. You can also reach out if you do not
+              understand how to use any feature inside the app.
+            </p>
+            <p>
+              When contacting support, briefly explain the issue and include any useful details, such as
+              the task name, project name, or the action you were trying to complete.
+            </p>
+          </div>
+          <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-3">
+            <div className="text-sm font-medium text-black">Contact email</div>
+            <a
+              href="mailto:mohammad.shihan@outlook.com"
+              className="mt-1 inline-block text-sm font-medium text-black underline underline-offset-4"
+            >
+              mohammad.shihan@outlook.com
+            </a>
+          </div>
+        </Card>
       </div>
     );
   }
@@ -2350,7 +2387,7 @@ export default function Home() {
     return (
       <Modal title={title} onClose={onClose} showCloseButton={false}>
         <form className="space-y-4" onSubmit={onSubmit}>
-          <Input label="Developer name" name="name" defaultValue={user?.name} required />
+          <Input label="Name" name="name" defaultValue={user?.name} required />
           <Input label="Email" name="email" type="email" defaultValue={user?.email} required />
           {!user && <PasswordInput label="Password" name="password" required />}
           <Select label="Role" name="role" defaultValue={user?.role ?? "Developer"}>
@@ -2379,7 +2416,7 @@ export default function Home() {
     return (
       <Modal title="Change Password" onClose={onClose} showCloseButton={false}>
         <form className="space-y-4" onSubmit={onSubmit}>
-          <Input label="Developer name" value={user?.name ?? ""} readOnly />
+          <Input label="Name" value={user?.name ?? ""} readOnly />
           <PasswordInput label="New password" name="password" required />
           <PasswordInput label="Confirm password" name="confirm" required />
           <FormActions onCancel={onClose} saveLabel="Save" />
