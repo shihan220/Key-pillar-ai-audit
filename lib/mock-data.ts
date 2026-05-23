@@ -73,7 +73,8 @@ export const mockTasks: Task[] = [
     status: "Complete",
     dueDate: "12 May 2026",
     createdDate: "2 May 2026",
-    lastUpdated: "8 May 2026, 3:10 PM"
+    lastUpdated: "8 May 2026, 3:10 PM",
+    attachments: []
   },
   {
     id: "t-login",
@@ -84,7 +85,8 @@ export const mockTasks: Task[] = [
     status: "In Progress",
     dueDate: "14 May 2026",
     createdDate: "3 May 2026",
-    lastUpdated: "9 May 2026, 10:05 AM"
+    lastUpdated: "9 May 2026, 10:05 AM",
+    attachments: []
   },
   {
     id: "t-api",
@@ -95,7 +97,8 @@ export const mockTasks: Task[] = [
     status: "Pending",
     dueDate: "16 May 2026",
     createdDate: "5 May 2026",
-    lastUpdated: "5 May 2026, 9:30 AM"
+    lastUpdated: "5 May 2026, 9:30 AM",
+    attachments: []
   },
   {
     id: "t-dashboard",
@@ -106,7 +109,8 @@ export const mockTasks: Task[] = [
     status: "Waiting for Approval",
     dueDate: "13 May 2026",
     createdDate: "4 May 2026",
-    lastUpdated: "9 May 2026, 11:30 AM"
+    lastUpdated: "9 May 2026, 11:30 AM",
+    attachments: []
   },
   {
     id: "t-responsive",
@@ -117,7 +121,8 @@ export const mockTasks: Task[] = [
     status: "Failed",
     dueDate: "15 May 2026",
     createdDate: "6 May 2026",
-    lastUpdated: "9 May 2026, 12:00 PM"
+    lastUpdated: "9 May 2026, 12:00 PM",
+    attachments: []
   },
   {
     id: "t-validation",
@@ -128,7 +133,8 @@ export const mockTasks: Task[] = [
     status: "Failed",
     dueDate: "17 May 2026",
     createdDate: "7 May 2026",
-    lastUpdated: "9 May 2026, 1:00 PM"
+    lastUpdated: "9 May 2026, 1:00 PM",
+    attachments: []
   }
 ];
 

@@ -233,9 +233,9 @@ export function Table({
 
 export function StatCard({ label, value }: { label: string; value: number | string }) {
   return (
-    <Card>
-      <div className="text-2xl font-semibold text-black">{value}</div>
-      <div className="mt-1 text-sm text-neutral-600">{label}</div>
+    <Card className="border-[#BFDBFE] bg-[#EFF6FF] shadow-sm transition group-hover:border-[#0B1F3A] group-hover:shadow-md">
+      <div className="text-2xl font-semibold text-[#111827]">{value}</div>
+      <div className="mt-1 text-sm text-[#111827]">{label}</div>
     </Card>
   );
 }

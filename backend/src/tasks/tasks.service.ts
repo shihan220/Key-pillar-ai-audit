@@ -1,9 +1,18 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { extname, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { CommentType, Prisma, Task, TaskStatus } from '@prisma/client';
-import { AuthenticatedUser } from '../auth/auth-user';
+import type { AuthenticatedUser } from '../auth/auth-user';
 import { commentTypeFromFrontend, parseDateInput, taskStatusFromFrontend } from '../common/frontend-mappers';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddCommentDto, ChangeTaskStatusDto, CreateTaskDto, ReassignTaskDto, UpdateTaskDto } from './dto/task.dto';
+
+type UploadedAttachment = {
+  originalname?: string;
+  mimetype?: string;
+  buffer?: Buffer;
+};
 
 @Injectable()
 export class TasksService {
@@ -80,13 +89,13 @@ export class TasksService {
       });
     } else {
       this.requireAssignedDeveloper(task, user);
+      await this.requireActiveClockSession(user);
 
       await this.prisma.task.update({
         where: { id: taskId },
         data: {
           title: body.title ?? task.title,
           description: body.description ?? task.description,
-          dueAt: body.dueDate ? parseDateInput(body.dueDate) : task.dueAt,
         },
       });
     }
@@ -144,6 +153,7 @@ export class TasksService {
   async changeTaskStatus(taskId: string, user: AuthenticatedUser, body: ChangeTaskStatusDto) {
     const task = await this.requireTask(taskId);
     this.requireAssignedDeveloper(task, user);
+    await this.requireActiveClockSession(user);
 
     const nextStatus = taskStatusFromFrontend(body.status);
     const current = task.status;
@@ -181,6 +191,7 @@ export class TasksService {
     }
     if (user.role !== 'ADMIN') {
       this.requireAssignedDeveloper(task, user);
+      await this.requireActiveClockSession(user);
     }
 
     await this.prisma.task.update({
@@ -196,6 +207,7 @@ export class TasksService {
     const task = await this.requireTask(taskId);
     if (user.role !== 'ADMIN') {
       this.requireAssignedDeveloper(task, user);
+      await this.requireActiveClockSession(user);
     }
 
     const commentType = commentTypeFromFrontend(body.type);
@@ -211,6 +223,28 @@ export class TasksService {
     const action = commentType === CommentType.ISSUE_COMMENT ? 'Issue comment added' : 'Comment added';
     await this.recordTaskEvent(task, user, action, undefined, body.text);
     return { success: true };
+  }
+
+  async uploadAttachment(taskId: string, user: AuthenticatedUser, file: UploadedAttachment | undefined, publicOrigin: string) {
+    const task = await this.requireTask(taskId);
+    if (user.role !== 'ADMIN') {
+      this.requireAssignedDeveloper(task, user);
+      await this.requireActiveClockSession(user);
+    }
+
+    const attachment = await this.storeAttachment(file, publicOrigin);
+    const createdAttachment = await this.prisma.taskAttachment.create({
+      data: {
+        taskId,
+        uploadedById: user.id,
+        fileName: attachment.name,
+        storageUrl: attachment.url,
+        mimeType: attachment.mimeType,
+      },
+    });
+
+    await this.recordTaskEvent(task, user, 'Task attachment uploaded', undefined, attachment.name);
+    return { success: true, id: createdAttachment.id };
   }
 
   private statusPatch(task: Task, nextStatus: TaskStatus, user: AuthenticatedUser): Prisma.TaskUncheckedUpdateInput {
@@ -298,5 +332,57 @@ export class TasksService {
     if (task.assignedDeveloperId !== user.id) {
       throw new ForbiddenException('You cannot update this task.');
     }
+  }
+
+  private async requireActiveClockSession(user: AuthenticatedUser) {
+    const session = await this.prisma.clockSession.findFirst({
+      where: {
+        userId: user.id,
+        clockOutAt: null,
+      },
+      orderBy: {
+        clockInAt: 'desc',
+      },
+    });
+
+    if (!session) {
+      throw new ForbiddenException('Please start working before making task changes.');
+    }
+  }
+
+  private async storeAttachment(file: UploadedAttachment | undefined, publicOrigin: string) {
+    if (!file?.buffer || !file.originalname) {
+      throw new BadRequestException('Attachment upload failed.');
+    }
+
+    const allowedMimeTypes = new Set([
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ]);
+
+    if (file.mimetype && !allowedMimeTypes.has(file.mimetype)) {
+      throw new BadRequestException('Unsupported attachment type.');
+    }
+
+    const extension = extname(file.originalname).toLowerCase();
+    const allowedExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.pdf', '.doc', '.docx']);
+    if (!allowedExtensions.has(extension)) {
+      throw new BadRequestException('Unsupported attachment type.');
+    }
+
+    const storedName = `${Date.now()}-${randomUUID()}${extension}`;
+    const uploadDirectory = join(process.cwd(), 'uploads', 'task-attachments');
+    await mkdir(uploadDirectory, { recursive: true });
+    await writeFile(join(uploadDirectory, storedName), file.buffer);
+
+    return {
+      name: file.originalname,
+      url: `${publicOrigin}/uploads/task-attachments/${storedName}`,
+      mimeType: file.mimetype,
+    };
   }
 }

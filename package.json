@@ -4,18 +4,22 @@
   "private": true,
   "scripts": {
     "dev": "next dev --webpack --hostname localhost --port 3000",
-    "build": "next build",
+    "build": "prisma generate && next build",
     "start": "next start",
     "lint": "eslint .",
+    "prebackend:dev": "prisma generate",
     "backend:dev": "BACKEND_HOST=0.0.0.0 BACKEND_PORT=4000 ts-node -r tsconfig-paths/register --project backend/tsconfig.json backend/src/main.ts",
+    "prebackend:build": "prisma generate",
     "backend:build": "tsc -p backend/tsconfig.build.json",
+    "prebackend:start": "prisma generate",
     "backend:start": "BACKEND_HOST=0.0.0.0 BACKEND_PORT=4000 node backend/dist/main.js",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "prisma:push": "prisma db push",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "prisma:seed": "tsx prisma/seed.ts"
+    "prisma:seed": "tsx prisma/seed.ts",
+    "reset:admin-password": "tsx prisma/reset-admin-password.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.19",

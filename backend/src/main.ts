@@ -14,12 +14,21 @@ for (const candidate of envCandidates) {
   }
 }
 
+function normalizeOrigin(origin: string) {
+  return origin.trim().replace(/\/+$/, '');
+}
+
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
-  const allowedOrigins = (
-    process.env.FRONTEND_ORIGIN
-      ? process.env.FRONTEND_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean)
-      : ['http://localhost:3000', 'http://127.0.0.1:3000']
+  const allowedOrigins = Array.from(
+    new Set([
+      normalizeOrigin('https://key-pillar-ai-audit.vercel.app'),
+      normalizeOrigin('http://localhost:3000'),
+      normalizeOrigin('http://127.0.0.1:3000'),
+      ...(process.env.FRONTEND_ORIGIN
+        ? process.env.FRONTEND_ORIGIN.split(',').map(normalizeOrigin).filter(Boolean)
+        : []),
+    ]),
   );
   app.enableCors({
     origin: allowedOrigins,
@@ -35,9 +44,9 @@ async function bootstrap() {
   app.useStaticAssets(resolve(process.cwd(), 'uploads'), {
     prefix: '/uploads/',
   });
-  const port = process.env.BACKEND_PORT ?? process.env.PORT ?? 4000;
-  const host = process.env.BACKEND_HOST ?? 'localhost';
-  const listenHost = host === 'localhost' ? '0.0.0.0' : host;
-  await app.listen(port, listenHost);
+  const port = Number(process.env.PORT ?? process.env.BACKEND_PORT ?? 4000);
+  const host = process.env.BACKEND_HOST ?? '0.0.0.0';
+  console.log(`[bootstrap] Allowed CORS origins: ${allowedOrigins.join(', ')}`);
+  await app.listen(port, host);
 }
 bootstrap();

@@ -32,8 +32,8 @@ import {
   deleteProject as apiDeleteProject,
   deleteTask as apiDeleteTask,
   fetchAppState,
+  fetchClockHistory,
   fetchNotifications as apiFetchNotifications,
-  fetchNotificationUnreadCount,
   fetchUserClockHistory,
   getStoredUser,
   login as apiLogin,
@@ -42,6 +42,7 @@ import {
   reassignTask as apiReassignTask,
   removeFailedStatus as apiRemoveFailedStatus,
   storeAuthSession,
+  uploadTaskAttachment as apiUploadTaskAttachment,
   updateProject as apiUpdateProject,
   updateTask as apiUpdateTask,
   updateUser as apiUpdateUser
@@ -56,6 +57,7 @@ import {
   ProjectStatus,
   Role,
   Status,
+  TaskAttachment,
   Task,
   User
 } from "@/lib/types";
@@ -78,6 +80,7 @@ type ModalState =
   | { name: "create-task" }
   | { name: "edit-task"; taskId: string }
   | { name: "reassign-task"; taskId: string }
+  | { name: "upload-task-file"; taskId: string }
   | { name: "create-developer" }
   | { name: "edit-developer"; userId: string }
   | { name: "change-password"; userId: string }
@@ -85,6 +88,15 @@ type ModalState =
 
 type AdminProjectDashboardFilter = "all" | "active" | "completed";
 type AdminTaskDashboardFilter = "all" | "pending" | "in-progress" | "failed" | "waiting-for-approval" | "complete";
+type AdminDashboardView =
+  | null
+  | { kind: "projects"; title: string; filter: AdminProjectDashboardFilter }
+  | { kind: "tasks"; title: string; filter: AdminTaskDashboardFilter }
+  | { kind: "developers"; title: string };
+type DeveloperDashboardTaskFilter = "all" | "pending" | "in-progress" | "failed" | "waiting-for-approval" | "complete";
+type DeveloperDashboardView =
+  | null
+  | { kind: "tasks"; title: string; filter: DeveloperDashboardTaskFilter };
 
 const statuses: Status[] = ["Pending", "In Progress", "Failed", "Waiting for Approval", "Complete"];
 const projectStatuses: ProjectStatus[] = ["Not Started", "In Progress", "Completed", "Archived"];
@@ -121,6 +133,51 @@ function isMissedDeadline(task: Task) {
   if (!dueDate) return false;
   dueDate.setHours(23, 59, 59, 999);
   return dueDate.getTime() < Date.now();
+}
+
+function DueDateWarning({ task, compact = false }: { task: Task; compact?: boolean }) {
+  return (
+    <span className={`inline-flex flex-wrap items-center gap-2 ${compact ? "" : "text-sm"}`}>
+      <span>{task.dueDate}</span>
+      {isMissedDeadline(task) && <span className="font-medium text-amber-700">⚠ Overdue</span>}
+    </span>
+  );
+}
+
+function buildWorkHistorySections(sessions: ClockSession[], currentTimeMs: number) {
+  const rows = sessions.map((session) => {
+    const clockIn = new Date(session.clockInAt);
+    const clockOut = session.clockOutAt ? new Date(session.clockOutAt) : null;
+    const completedDuration = clockOut ? Math.max(0, clockOut.getTime() - clockIn.getTime()) : null;
+    const liveDuration = clockOut ? null : Math.max(0, currentTimeMs - clockIn.getTime());
+
+    return {
+      id: session.id,
+      date: formatWorkDate(session.clockInAt),
+      clockIn: formatWorkTime(session.clockInAt),
+      clockOut: clockOut ? formatWorkTime(session.clockOutAt as string) : "In progress",
+      totalWorked: completedDuration !== null ? formatWorkedDuration(completedDuration) : liveDuration !== null ? formatWorkedDuration(liveDuration) : "In progress",
+      completedDuration,
+    };
+  });
+
+  return rows.reduce<
+    { date: string; sessions: typeof rows; dailyTotalMs: number }[]
+  >((groups, row) => {
+    const existing = groups.find((group) => group.date === row.date);
+    if (existing) {
+      existing.sessions.push(row);
+      existing.dailyTotalMs += row.completedDuration ?? 0;
+      return groups;
+    }
+
+    groups.push({
+      date: row.date,
+      sessions: [row],
+      dailyTotalMs: row.completedDuration ?? 0,
+    });
+    return groups;
+  }, []);
 }
 
 function splitDateTime(dateTime: string) {
@@ -410,8 +467,8 @@ export default function Home() {
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
-  const [selectedNotification, setSelectedNotification] = useState<Notification | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [selectedNotification, setSelectedNotification] = useState<Notification | null>(null);
   const [activeClockSession, setActiveClockSession] = useState<ClockSession | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [page, setPage] = useState<Page>("admin-dashboard");
@@ -435,9 +492,20 @@ export default function Home() {
   const [isAppLoading, setIsAppLoading] = useState(false);
   const [showClockInPrompt, setShowClockInPrompt] = useState(false);
   const [clockOutPromptMode, setClockOutPromptMode] = useState<"clock-out" | "logout" | null>(null);
+  const [showLogoutPrompt, setShowLogoutPrompt] = useState(false);
   const [clockTick, setClockTick] = useState(() => Date.now());
   const [adminProjectDashboardFilter, setAdminProjectDashboardFilter] = useState<AdminProjectDashboardFilter>("all");
   const [adminTaskDashboardFilter, setAdminTaskDashboardFilter] = useState<AdminTaskDashboardFilter>("all");
+  const [selectedDashboardView, setSelectedDashboardView] = useState<AdminDashboardView>(null);
+  const [selectedDeveloperDashboardView, setSelectedDeveloperDashboardView] = useState<DeveloperDashboardView>(null);
+  const [settingsPasswordMessage, setSettingsPasswordMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [settingsCurrentPassword, setSettingsCurrentPassword] = useState("");
+  const [settingsNewPassword, setSettingsNewPassword] = useState("");
+  const [settingsConfirmPassword, setSettingsConfirmPassword] = useState("");
+  const [taskAttachmentMessage, setTaskAttachmentMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [selectedTaskAttachmentName, setSelectedTaskAttachmentName] = useState("");
+  const [myWorkSessions, setMyWorkSessions] = useState<ClockSession[]>([]);
+  const [myWorkHistoryLoading, setMyWorkHistoryLoading] = useState(false);
   const [myTaskFilter, setMyTaskFilter] = useState<Status | "All">("All");
   const [auditFilters, setAuditFilters] = useState({
     user: "",
@@ -449,7 +517,7 @@ export default function Home() {
   });
 
   const activeTasks = useMemo(() => tasks.filter((task) => !task.deleted), [tasks]);
-  const selectedTask = activeTasks.find((task) => task.id === selectedTaskId) ?? activeTasks[0];
+  const selectedTask = selectedTaskId ? activeTasks.find((task) => task.id === selectedTaskId) : activeTasks[0];
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
   const developers = users.filter((user) => user.role === "Developer");
   const activeClockDuration = useMemo(() => {
@@ -458,6 +526,19 @@ export default function Home() {
     if (Number.isNaN(startedAt)) return "00:00:00";
     return formatDuration(clockTick - startedAt);
   }, [activeClockSession, clockTick]);
+
+  const resetLandingState = (role?: Role) => {
+    setSelectedDashboardView(null);
+    setSelectedDeveloperDashboardView(null);
+    setAdminProjectDashboardFilter("all");
+    setAdminTaskDashboardFilter("all");
+    setSelectedProjectId("");
+    setSelectedTaskId("");
+    setPage(role === "Developer" ? "developer-dashboard" : "admin-dashboard");
+    if (typeof window !== "undefined") {
+      window.history.replaceState({}, "", "/");
+    }
+  };
 
   const resetAppState = () => {
     setUsers([]);
@@ -468,6 +549,7 @@ export default function Home() {
     setAuditLogs([]);
     setNotifications([]);
     setNotificationUnreadCount(0);
+    setNotificationsOpen(false);
     setSelectedNotification(null);
     setActiveClockSession(null);
     setSelectedTaskId("");
@@ -475,6 +557,9 @@ export default function Home() {
     setDeleteUserId(null);
     setShowClockInPrompt(false);
     setClockOutPromptMode(null);
+    setShowLogoutPrompt(false);
+    setTaskAttachmentMessage(null);
+    setSelectedTaskAttachmentName("");
   };
 
   const applyAppState = (
@@ -546,7 +631,7 @@ export default function Home() {
     }
 
     setCurrentUser(storedUser);
-    setPage(storedUser.role === "Admin" ? "admin-dashboard" : "developer-dashboard");
+    resetLandingState(storedUser.role);
     void refreshState(storedUser.id)
       .catch((error) => {
         console.error(error);
@@ -607,17 +692,18 @@ export default function Home() {
     if (!currentUser) {
       setNotifications([]);
       setNotificationUnreadCount(0);
+      setNotificationsOpen(false);
       setSelectedNotification(null);
       return;
     }
 
     let cancelled = false;
 
-    void Promise.all([apiFetchNotifications(), fetchNotificationUnreadCount()])
-      .then(([notificationResponse, unreadCountResponse]) => {
+    void apiFetchNotifications()
+      .then((notificationResponse) => {
         if (cancelled) return;
         setNotifications(notificationResponse.notifications);
-        setNotificationUnreadCount(unreadCountResponse.count);
+        setNotificationUnreadCount(notificationResponse.notifications.filter((item) => !item.isRead).length);
       })
       .catch((error) => {
         if (cancelled) return;
@@ -625,6 +711,36 @@ export default function Home() {
         setNotificationUnreadCount(0);
         setSelectedNotification(null);
         console.error(error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== "Developer") {
+      setMyWorkSessions([]);
+      setMyWorkHistoryLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setMyWorkHistoryLoading(true);
+
+    void fetchClockHistory()
+      .then((response) => {
+        if (cancelled) return;
+        setMyWorkSessions(response.sessions);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setMyWorkSessions([]);
+        console.error(error);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setMyWorkHistoryLoading(false);
       });
 
     return () => {
@@ -654,7 +770,7 @@ export default function Home() {
       const response = await apiLogin(email, password);
       storeAuthSession(response.accessToken, response.user);
       setCurrentUser(response.user);
-      setPage(response.user.role === "Admin" ? "admin-dashboard" : "developer-dashboard");
+      resetLandingState(response.user.role);
       setLoginError("");
       setSessionError("");
       try {
@@ -681,7 +797,7 @@ export default function Home() {
       resetAppState();
       setCurrentUser(null);
       setMobileOpen(false);
-      setPage("admin-dashboard");
+      resetLandingState("Admin");
     }
   };
 
@@ -711,11 +827,24 @@ export default function Home() {
   };
 
   const logout = async () => {
+    setShowLogoutPrompt(false);
     if (currentUser?.role === "Developer" && activeClockSession) {
       setClockOutPromptMode("logout");
       return;
     }
     await performLogout();
+  };
+
+  const requestLogout = () => {
+    setShowLogoutPrompt(true);
+  };
+
+  const ensureDeveloperCanChangeTasks = () => {
+    if (currentUser?.role === "Developer" && !activeClockSession) {
+      window.alert("Please start working before making task changes.");
+      return false;
+    }
+    return true;
   };
 
   const navigate = (nextPage: Page) => {
@@ -724,26 +853,16 @@ export default function Home() {
     const developerOnly: Page[] = ["developer-dashboard", "my-tasks", "help"];
     if (currentUser.role === "Developer" && adminOnly.includes(nextPage)) return;
     if (currentUser.role === "Admin" && developerOnly.includes(nextPage)) return;
+    setSelectedDashboardView(null);
+    setSelectedDeveloperDashboardView(null);
+    if (nextPage === "projects") {
+      setAdminProjectDashboardFilter("all");
+    }
+    if (nextPage === "tasks") {
+      setAdminTaskDashboardFilter("all");
+    }
     setPage(nextPage);
     setMobileOpen(false);
-  };
-
-  const openAdminDashboardTarget = (
-    nextPage: Extract<Page, "projects" | "tasks" | "developers">,
-    options?: {
-      projectFilter?: AdminProjectDashboardFilter;
-      taskFilter?: AdminTaskDashboardFilter;
-      path?: string;
-    }
-  ) => {
-    if (!currentUser || currentUser.role !== "Admin") return;
-    setAdminProjectDashboardFilter(options?.projectFilter ?? "all");
-    setAdminTaskDashboardFilter(options?.taskFilter ?? "all");
-    setPage(nextPage);
-    setMobileOpen(false);
-    if (typeof window !== "undefined" && options?.path) {
-      window.history.pushState({}, "", options.path);
-    }
   };
 
   const openTaskDetails = (taskId: string) => {
@@ -814,22 +933,23 @@ export default function Home() {
   const editTask = async (event: FormEvent<HTMLFormElement>, taskId: string) => {
     event.preventDefault();
     if (!currentUser) return;
+    if (!ensureDeveloperCanChangeTasks()) return;
     try {
       const form = new FormData(event.currentTarget);
       const body: {
         title: string;
         description: string;
-        dueDate: string;
+        dueDate?: string;
         projectId?: string;
         developerId?: string;
         status?: Status;
       } = {
         title: String(form.get("title")),
-        description: String(form.get("description")),
-        dueDate: String(form.get("dueDate"))
+        description: String(form.get("description"))
       };
 
       if (currentUser.role === "Admin") {
+        body.dueDate = String(form.get("dueDate"));
         body.projectId = String(form.get("projectId"));
         body.developerId = String(form.get("developerId"));
         body.status = form.get("status") as Status;
@@ -880,6 +1000,7 @@ export default function Home() {
 
   const changeTaskStatus = async (taskId: string, status: Status) => {
     if (!currentUser) return;
+    if (!ensureDeveloperCanChangeTasks()) return;
     const task = tasks.find((item) => item.id === taskId);
     if (!task) return;
     try {
@@ -897,6 +1018,7 @@ export default function Home() {
   const addComment = async (event: FormEvent<HTMLFormElement>, taskId: string) => {
     event.preventDefault();
     if (!currentUser) return;
+    if (!ensureDeveloperCanChangeTasks()) return;
     try {
       const form = new FormData(event.currentTarget);
       const type = form.get("type") as Comment["type"];
@@ -910,6 +1032,39 @@ export default function Home() {
       event.currentTarget.reset();
     } catch (error) {
       showActionError(error, "Failed to add comment.");
+    }
+  };
+
+  const uploadTaskAttachment = async (event: FormEvent<HTMLFormElement>, taskId: string) => {
+    event.preventDefault();
+    if (!currentUser) return;
+    if (!tasks.some((task) => task.id === taskId && !task.deleted)) {
+      setTaskAttachmentMessage({ type: "error", text: "This task is no longer available for upload." });
+      return;
+    }
+    if (!ensureDeveloperCanChangeTasks()) {
+      setTaskAttachmentMessage({ type: "error", text: "Please start working before making task changes." });
+      return;
+    }
+    try {
+      const form = new FormData(event.currentTarget);
+      const file = form.get("attachment");
+      if (!(file instanceof File) || file.size === 0) {
+        setTaskAttachmentMessage({ type: "error", text: "Please select a file to upload." });
+        return;
+      }
+
+      const payload = new FormData();
+      payload.set("attachment", file);
+      await apiUploadTaskAttachment(taskId, payload);
+      await refreshState(currentUser.id);
+      setTaskAttachmentMessage({ type: "success", text: "File uploaded successfully." });
+      setSelectedTaskAttachmentName("");
+    } catch (error) {
+      setTaskAttachmentMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Failed to upload file."
+      });
     }
   };
 
@@ -990,6 +1145,48 @@ export default function Home() {
       setModal(null);
     } catch (error) {
       showActionError(error, "Failed to change password.");
+    }
+  };
+
+  const updateAdminPasswordFromSettings = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!currentUser || currentUser.role !== "Admin") return;
+
+    if (!settingsCurrentPassword) {
+      setSettingsPasswordMessage({ type: "error", text: "Current password is required." });
+      return;
+    }
+
+    if (!settingsNewPassword) {
+      setSettingsPasswordMessage({ type: "error", text: "New password is required." });
+      return;
+    }
+
+    if (!settingsConfirmPassword) {
+      setSettingsPasswordMessage({ type: "error", text: "Confirm new password is required." });
+      return;
+    }
+
+    if (settingsNewPassword !== settingsConfirmPassword) {
+      setSettingsPasswordMessage({ type: "error", text: "New password and confirm password must match." });
+      return;
+    }
+
+    try {
+      await changeUserPassword(currentUser.id, {
+        currentPassword: settingsCurrentPassword,
+        password: settingsNewPassword,
+        confirmPassword: settingsConfirmPassword
+      });
+      setSettingsPasswordMessage({ type: "success", text: "Admin password updated successfully." });
+      setSettingsCurrentPassword("");
+      setSettingsNewPassword("");
+      setSettingsConfirmPassword("");
+    } catch (error) {
+      setSettingsPasswordMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Failed to update admin password."
+      });
     }
   };
 
@@ -1101,7 +1298,8 @@ export default function Home() {
   }
 
   const authUser = currentUser;
-  const isDashboardPage = page === "admin-dashboard" || page === "developer-dashboard";
+  const notificationBadgeText =
+    notificationUnreadCount > 99 ? "99+" : notificationUnreadCount > 0 ? String(notificationUnreadCount) : "";
 
   const navItems =
     authUser.role === "Admin"
@@ -1122,6 +1320,7 @@ export default function Home() {
   const pageTitle =
     navItems.find(([key]) => key === page)?.[1] ??
     (page === "task-details" ? "Task Details" : page === "projects" ? "Projects" : "Dashboard");
+  const settingsAdminUser = users.find((user) => user.id === authUser.id) ?? authUser;
 
   return (
     <div className="min-h-screen bg-white text-black">
@@ -1149,14 +1348,14 @@ export default function Home() {
               key={key}
               onClick={() => navigate(key as Page)}
               className={`w-full rounded-md px-3 py-2 text-left text-sm font-medium ${
-                page === key ? "bg-black text-white" : "text-black hover:bg-neutral-100"
+                page === key ? "bg-[#0B1F3A] text-white" : "text-black hover:bg-neutral-100"
               }`}
             >
               {label}
             </button>
           ))}
           <button
-            onClick={logout}
+            onClick={requestLogout}
             className="w-full rounded-md px-3 py-2 text-left text-sm font-medium text-black hover:bg-neutral-100"
           >
             Logout
@@ -1181,6 +1380,57 @@ export default function Home() {
             <h1 className="truncate text-lg font-semibold sm:text-xl">{pageTitle}</h1>
           </div>
           <div className="flex items-center gap-3">
+            {
+              <div className="relative">
+                <button
+                  type="button"
+                  aria-label="Notifications"
+                  onClick={() => setNotificationsOpen((value) => !value)}
+                  className="relative flex h-10 w-10 items-center justify-center rounded-md border border-neutral-300 bg-white text-lg text-black hover:bg-neutral-100"
+                >
+                  <span aria-hidden="true">🔔</span>
+                  {notificationBadgeText && (
+                    <span className="absolute -right-1 -top-1 inline-flex min-h-5 min-w-5 items-center justify-center rounded-full bg-black px-1.5 text-[11px] font-semibold text-white">
+                      {notificationBadgeText}
+                    </span>
+                  )}
+                </button>
+                {notificationsOpen && (
+                  <div className="absolute right-0 top-full z-30 mt-2 w-80 overflow-hidden rounded-md border border-neutral-200 bg-white shadow-sm">
+                    <div className="border-b border-neutral-200 px-4 py-3">
+                      <div className="text-sm font-semibold text-black">Notifications</div>
+                    </div>
+                    <div className="max-h-96 overflow-y-auto">
+                      {notifications.length > 0 ? (
+                        notifications.map((notification) => (
+                          <button
+                            key={notification.id}
+                            type="button"
+                            onClick={() => {
+                              setNotificationsOpen(false);
+                              void openNotification(notification);
+                            }}
+                            className={`block w-full border-b border-neutral-200 px-4 py-3 text-left hover:bg-neutral-50 ${
+                              notification.isRead ? "bg-white" : "bg-neutral-50"
+                            }`}
+                          >
+                            <div className={`text-sm ${notification.isRead ? "font-medium" : "font-semibold"}`}>
+                              {notification.title}
+                            </div>
+                            <div className="mt-1 text-sm text-neutral-600">{notification.message}</div>
+                            <div className="mt-2 text-xs text-neutral-500">
+                              {notification.entityType} · {formatNotificationDateTime(notification.createdAt)}
+                            </div>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="px-4 py-6 text-sm text-neutral-600">No notifications available.</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            }
             {authUser.role === "Developer" && (
               activeClockSession ? (
                 <div className="text-right text-sm">
@@ -1282,10 +1532,106 @@ export default function Home() {
           {page === "projects" && <ProjectsPage />}
           {page === "tasks" && <TasksPage />}
           {page === "my-tasks" && <MyTasksPage />}
-          {page === "task-details" && selectedTask && <TaskDetailsPage task={selectedTask} />}
+          {page === "task-details" &&
+            (selectedTask ? (
+              <TaskDetailsPage task={selectedTask} />
+            ) : (
+              <Card>
+                <EmptyState title="Task details are unavailable for this item." />
+              </Card>
+            ))}
           {page === "developers" && <DevelopersPage />}
           {page === "audit-logs" && <AuditLogsPage />}
-          {page === "settings" && <SettingsPage />}
+          {page === "settings" && (
+            <div className="space-y-6">
+              <Card className="border-[#BFDBFE] bg-white">
+                <div className="flex items-center gap-4">
+                  <img
+                    src="/brand/keypillar-ai-logo.jpeg"
+                    alt="Keypillar AI logo"
+                    className="h-14 w-14 rounded-md object-cover"
+                  />
+                  <div>
+                    <h2 className="text-xl font-semibold text-[#111827]">Keypillar AI</h2>
+                    <p className="text-sm text-neutral-600">Audit Log &amp; Task Tracking App</p>
+                  </div>
+                </div>
+              </Card>
+
+              <div className="grid gap-6 xl:grid-cols-2">
+                <Card className="border-[#BFDBFE] bg-white">
+                  <SectionTitle title="Admin Account" />
+                  <div className="mb-4 rounded-md border border-neutral-200 bg-neutral-50 p-4">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Current admin email</div>
+                    <div className="mt-1 text-sm text-[#111827]">{settingsAdminUser.email}</div>
+                  </div>
+                  <form className="space-y-4" onSubmit={updateAdminPasswordFromSettings}>
+                    <PasswordInput
+                      label="Current password"
+                      name="currentPassword"
+                      value={settingsCurrentPassword}
+                      onChange={(event) => {
+                        setSettingsCurrentPassword(event.target.value);
+                        if (settingsPasswordMessage) setSettingsPasswordMessage(null);
+                      }}
+                      required
+                    />
+                    <PasswordInput
+                      label="New password"
+                      name="password"
+                      value={settingsNewPassword}
+                      onChange={(event) => {
+                        setSettingsNewPassword(event.target.value);
+                        if (settingsPasswordMessage) setSettingsPasswordMessage(null);
+                      }}
+                      required
+                    />
+                    <PasswordInput
+                      label="Confirm new password"
+                      name="confirm"
+                      value={settingsConfirmPassword}
+                      onChange={(event) => {
+                        setSettingsConfirmPassword(event.target.value);
+                        if (settingsPasswordMessage) setSettingsPasswordMessage(null);
+                      }}
+                      required
+                    />
+                    {settingsPasswordMessage && (
+                      <div
+                        className={`rounded-md border px-3 py-2 text-sm ${
+                          settingsPasswordMessage.type === "success"
+                            ? "border-[#BFDBFE] bg-[#EFF6FF] text-[#111827]"
+                            : "border-red-200 bg-red-50 text-red-700"
+                        }`}
+                      >
+                        {settingsPasswordMessage.text}
+                      </div>
+                    )}
+                    <Button type="submit">Update Password</Button>
+                  </form>
+                  <p className="mt-4 text-sm text-neutral-600">Only the admin password can be changed from Settings.</p>
+                </Card>
+              </div>
+
+              <Card className="border-[#BFDBFE] bg-white">
+                <SectionTitle title="App Info" />
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="rounded-md border border-neutral-200 bg-neutral-50 p-4">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Version</div>
+                    <div className="mt-1 text-sm text-[#111827]">1.0.0</div>
+                  </div>
+                  <div className="rounded-md border border-neutral-200 bg-neutral-50 p-4">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Database</div>
+                    <div className="mt-1 text-sm text-[#111827]">PostgreSQL</div>
+                  </div>
+                  <div className="rounded-md border border-neutral-200 bg-neutral-50 p-4">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Backend</div>
+                    <div className="mt-1 text-sm text-[#111827]">Connected</div>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          )}
           {page === "help" && <HelpPage />}
         </main>
       </div>
@@ -1318,6 +1664,41 @@ export default function Home() {
           onSubmit={(event) => reassignTask(event, modal.taskId)}
           onClose={() => setModal(null)}
         />
+      )}
+      {modal?.name === "upload-task-file" && (
+        <Modal title="Upload File" onClose={() => setModal(null)} showCloseButton={false}>
+          <form className="space-y-4" onSubmit={(event) => uploadTaskAttachment(event, modal.taskId)} encType="multipart/form-data">
+            <Input
+              label="Upload document or image"
+              name="attachment"
+              type="file"
+              accept=".jpg,.jpeg,.png,.webp,.pdf,.doc,.docx"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                setSelectedTaskAttachmentName(file?.name ?? "");
+                setTaskAttachmentMessage(null);
+              }}
+            />
+            {selectedTaskAttachmentName && <p className="text-sm text-neutral-600">Selected file: {selectedTaskAttachmentName}</p>}
+            {taskAttachmentMessage && (
+              <div
+                className={`rounded-md border px-3 py-2 text-sm ${
+                  taskAttachmentMessage.type === "success"
+                    ? "border-[#BFDBFE] bg-[#EFF6FF] text-[#111827]"
+                    : "border-red-200 bg-red-50 text-red-700"
+                }`}
+              >
+                {taskAttachmentMessage.text}
+              </div>
+            )}
+            <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
+              <Button variant="secondary" onClick={() => setModal(null)}>
+                Cancel
+              </Button>
+              <Button type="submit">Upload</Button>
+            </div>
+          </form>
+        </Modal>
       )}
       {modal?.name === "create-developer" && (
         <DeveloperForm title="Create User" onSubmit={createDeveloper} onClose={() => setModal(null)} />
@@ -1358,6 +1739,19 @@ export default function Home() {
                   </Button>
                 )}
               <Button onClick={() => setSelectedNotification(null)}>Close</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {showLogoutPrompt && (
+        <Modal title="Logout" onClose={() => setShowLogoutPrompt(false)} showCloseButton={false}>
+          <div className="space-y-6">
+            <p className="text-sm text-neutral-700">Do you want to log out ?</p>
+            <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
+              <Button onClick={logout}>Yes</Button>
+              <Button variant="secondary" onClick={() => setShowLogoutPrompt(false)}>
+                No
+              </Button>
             </div>
           </div>
         </Modal>
@@ -1455,23 +1849,160 @@ export default function Home() {
       developers: developers.length
     };
     const waitingTasks = activeTasks.filter((task) => task.status === "Waiting for Approval");
+    const dashboardProjects =
+      selectedDashboardView?.kind === "projects"
+        ? selectedDashboardView.filter === "active"
+          ? projects.filter((project) => resolvedProjectStatus(project) !== "Archived")
+          : selectedDashboardView.filter === "completed"
+            ? projects.filter((project) => resolvedProjectStatus(project) === "Completed")
+            : projects
+        : [];
+    const dashboardTasks =
+      selectedDashboardView?.kind === "tasks"
+        ? selectedDashboardView.filter === "pending"
+          ? activeTasks.filter((task) => task.status === "Pending")
+          : selectedDashboardView.filter === "in-progress"
+            ? activeTasks.filter((task) => task.status === "In Progress")
+            : selectedDashboardView.filter === "failed"
+              ? activeTasks.filter((task) => task.status === "Failed")
+              : selectedDashboardView.filter === "waiting-for-approval"
+                ? activeTasks.filter((task) => task.status === "Waiting for Approval")
+                : selectedDashboardView.filter === "complete"
+                  ? activeTasks.filter((task) => task.status === "Complete")
+                  : activeTasks
+        : [];
+
+    if (selectedDashboardView?.kind === "projects") {
+      return (
+        <div className="space-y-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-xl font-semibold">{selectedDashboardView.title}</h2>
+            <Button
+              className="border-[#0B1F3A] bg-[#0B1F3A] text-white hover:bg-[#102A43]"
+              onClick={() => setSelectedDashboardView(null)}
+            >
+              Back to Dashboard
+            </Button>
+          </div>
+          <Card className="border-[#0B1F3A] bg-white">
+            <Table headers={["Project Name", "Description", "Status", "Total Tasks", "Completed Tasks", "Created Date"]}>
+              {dashboardProjects.map((project) => {
+                const projectCounts = projectTaskCounts(project.id);
+                return (
+                  <tr key={project.id} className="hover:bg-neutral-50">
+                    <Cell>{project.name}</Cell>
+                    <Cell>{project.description}</Cell>
+                    <Cell>
+                      <ProjectStatusBadge status={resolvedProjectStatus(project)} />
+                    </Cell>
+                    <Cell>{projectCounts.total}</Cell>
+                    <Cell>{projectCounts.completed}</Cell>
+                    <Cell>{project.createdDate}</Cell>
+                  </tr>
+                );
+              })}
+            </Table>
+            {dashboardProjects.length === 0 && <EmptyState title="No projects found for this view." />}
+          </Card>
+        </div>
+      );
+    }
+
+    if (selectedDashboardView?.kind === "tasks") {
+      return (
+        <div className="space-y-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-xl font-semibold">{selectedDashboardView.title}</h2>
+            <Button
+              className="border-[#0B1F3A] bg-[#0B1F3A] text-white hover:bg-[#102A43]"
+              onClick={() => setSelectedDashboardView(null)}
+            >
+              Back to Dashboard
+            </Button>
+          </div>
+          <Card className="border-[#0B1F3A] bg-white">
+            <Table headers={["Task Title", "Project", "Assigned Developer", "Status", "Due Date", "Last Updated"]}>
+              {dashboardTasks.map((task) => (
+                <tr key={task.id} className="hover:bg-neutral-50">
+                  <Cell>{task.title}</Cell>
+                  <Cell>{projectName(task.projectId)}</Cell>
+                  <Cell>{developerName(task.developerId)}</Cell>
+                  <Cell>
+                    <StatusBadge status={task.status} />
+                  </Cell>
+                  <Cell>
+                    <DueDateWarning task={task} compact />
+                  </Cell>
+                  <Cell>{task.lastUpdated}</Cell>
+                </tr>
+              ))}
+            </Table>
+            {dashboardTasks.length === 0 && <EmptyState title="No tasks found for this view." />}
+          </Card>
+        </div>
+      );
+    }
+
+    if (selectedDashboardView?.kind === "developers") {
+      return (
+        <div className="space-y-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-xl font-semibold">{selectedDashboardView.title}</h2>
+            <Button
+              className="border-[#0B1F3A] bg-[#0B1F3A] text-white hover:bg-[#102A43]"
+              onClick={() => setSelectedDashboardView(null)}
+            >
+              Back to Dashboard
+            </Button>
+          </div>
+          <Card className="border-[#0B1F3A] bg-white">
+            <Table headers={["Name", "Role", "Account Status", "Completed Tasks", "Failed Tasks", "Last Login"]}>
+              {developers.map((user) => {
+                const developerCounts = developerDetailCounts(user.id);
+                return (
+                  <tr key={user.id} className="hover:bg-neutral-50">
+                    <Cell>{user.name}</Cell>
+                    <Cell>{user.role}</Cell>
+                    <Cell>
+                      <Badge
+                        className={
+                          user.accountStatus === "Active"
+                            ? "border-green-600 bg-white text-green-700"
+                            : "border-red-600 bg-white text-red-700"
+                        }
+                      >
+                        {user.accountStatus}
+                      </Badge>
+                    </Cell>
+                    <Cell>{developerCounts.completedTasks}</Cell>
+                    <Cell>{developerCounts.failedTasks}</Cell>
+                    <Cell>{user.lastLogin}</Cell>
+                  </tr>
+                );
+              })}
+            </Table>
+            {developers.length === 0 && <EmptyState title="No developers found for this view." />}
+          </Card>
+        </div>
+      );
+    }
 
     return (
       <div className="space-y-6">
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          <DashboardNavCard label="Total Projects" value={counts.totalProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "all", path: "/?section=projects" })} />
-          <DashboardNavCard label="Active Projects" value={counts.activeProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "active", path: "/?section=projects&status=active" })} />
-          <DashboardNavCard label="Completed Projects" value={counts.completedProjects} onClick={() => openAdminDashboardTarget("projects", { projectFilter: "completed", path: "/?section=projects&status=completed" })} />
-          <DashboardNavCard label="Total Tasks" value={counts.totalTasks} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "all", path: "/?section=tasks" })} />
-          <DashboardNavCard label="Pending Tasks" value={counts.pending} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "pending", path: "/?section=tasks&status=pending" })} />
-          <DashboardNavCard label="In Progress Tasks" value={counts.progress} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "in-progress", path: "/?section=tasks&status=in-progress" })} />
-          <DashboardNavCard label="Failed Tasks" value={counts.failed} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "failed", path: "/?section=tasks&status=failed" })} />
-          <DashboardNavCard label="Waiting for Approval Tasks" value={counts.waiting} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "waiting-for-approval", path: "/?section=tasks&status=waiting-for-approval" })} />
-          <DashboardNavCard label="Completed Tasks" value={counts.complete} onClick={() => openAdminDashboardTarget("tasks", { taskFilter: "complete", path: "/?section=tasks&status=complete" })} />
-          <DashboardNavCard label="Total Developers" value={counts.developers} onClick={() => openAdminDashboardTarget("developers", { path: "/?section=developers" })} />
+          <DashboardNavCard label="Total Projects" value={counts.totalProjects} onClick={() => setSelectedDashboardView({ kind: "projects", title: "All Projects", filter: "all" })} />
+          <DashboardNavCard label="Active Projects" value={counts.activeProjects} onClick={() => setSelectedDashboardView({ kind: "projects", title: "Active Projects", filter: "active" })} />
+          <DashboardNavCard label="Completed Projects" value={counts.completedProjects} onClick={() => setSelectedDashboardView({ kind: "projects", title: "Completed Projects", filter: "completed" })} />
+          <DashboardNavCard label="Total Tasks" value={counts.totalTasks} onClick={() => setSelectedDashboardView({ kind: "tasks", title: "All Tasks", filter: "all" })} />
+          <DashboardNavCard label="Pending Tasks" value={counts.pending} onClick={() => setSelectedDashboardView({ kind: "tasks", title: "Pending Tasks", filter: "pending" })} />
+          <DashboardNavCard label="In Progress Tasks" value={counts.progress} onClick={() => setSelectedDashboardView({ kind: "tasks", title: "In Progress Tasks", filter: "in-progress" })} />
+          <DashboardNavCard label="Failed Tasks" value={counts.failed} onClick={() => setSelectedDashboardView({ kind: "tasks", title: "Failed Tasks", filter: "failed" })} />
+          <DashboardNavCard label="Waiting for Approval Tasks" value={counts.waiting} onClick={() => setSelectedDashboardView({ kind: "tasks", title: "Waiting for Approval Tasks", filter: "waiting-for-approval" })} />
+          <DashboardNavCard label="Completed Tasks" value={counts.complete} onClick={() => setSelectedDashboardView({ kind: "tasks", title: "Completed Tasks", filter: "complete" })} />
+          <DashboardNavCard label="Total Developers" value={counts.developers} onClick={() => setSelectedDashboardView({ kind: "developers", title: "Developers" })} />
         </div>
 
-        <Card>
+        <Card className="border-[#BFDBFE] bg-white">
           <SectionTitle title="Recent Task Activity" />
           <Table headers={["Task Name", "Project", "Developer", "Status", "Last Updated"]}>
             {activeTasks.slice(0, 5).map((task) => (
@@ -1488,7 +2019,7 @@ export default function Home() {
           </Table>
         </Card>
 
-        <Card>
+        <Card className="border-[#BFDBFE] bg-white">
           <SectionTitle title="Recent Audit Logs" />
           <Table headers={["Action", "User", "Role", "Date & Time"]}>
             {auditLogs.slice(0, 5).map((log) => (
@@ -1502,7 +2033,7 @@ export default function Home() {
           </Table>
         </Card>
 
-        <Card>
+        <Card className="border-[#BFDBFE] bg-white">
           <SectionTitle title="Tasks Waiting for Approval" />
           <div className="grid gap-3">
             {waitingTasks.length === 0 && <EmptyState title="No tasks are waiting for approval." />}
@@ -1537,20 +2068,143 @@ export default function Home() {
   function DeveloperDashboard() {
     const myTasks = activeTasks.filter((task) => task.developerId === authUser.id);
     const list = (status: Status) => myTasks.filter((task) => task.status === status);
+    const workSections = buildWorkHistorySections(myWorkSessions, clockTick);
+    const dashboardTasks =
+      selectedDeveloperDashboardView?.kind === "tasks"
+        ? selectedDeveloperDashboardView.filter === "pending"
+          ? list("Pending")
+          : selectedDeveloperDashboardView.filter === "in-progress"
+            ? list("In Progress")
+            : selectedDeveloperDashboardView.filter === "failed"
+              ? list("Failed")
+              : selectedDeveloperDashboardView.filter === "waiting-for-approval"
+                ? list("Waiting for Approval")
+                : selectedDeveloperDashboardView.filter === "complete"
+                  ? list("Complete")
+                  : myTasks
+        : [];
+
+    if (selectedDeveloperDashboardView?.kind === "tasks") {
+      return (
+        <div className="space-y-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-xl font-semibold">{selectedDeveloperDashboardView.title}</h2>
+            <Button
+              className="border-[#0B1F3A] bg-[#0B1F3A] text-white hover:bg-[#102A43]"
+              onClick={() => setSelectedDeveloperDashboardView(null)}
+            >
+              Back to Dashboard
+            </Button>
+          </div>
+          <Card className="border-[#0B1F3A] bg-white">
+            <Table headers={["Task Title", "Project", "Status", "Due Date", "Last Updated", "Actions"]}>
+              {dashboardTasks.map((task) => (
+                <tr key={task.id} className="hover:bg-neutral-50">
+                  <Cell>{task.title}</Cell>
+                  <Cell>{projectName(task.projectId)}</Cell>
+                  <Cell>
+                    <StatusBadge status={task.status} />
+                  </Cell>
+                  <Cell>
+                    <DueDateWarning task={task} compact />
+                  </Cell>
+                  <Cell>{task.lastUpdated}</Cell>
+                  <Cell>
+                    <ActionGroup>
+                      <ProjectFileButton project={projectForTask(task)} label="Open Project File" hideWhenMissing />
+                      <Button
+                        variant="secondary"
+                        onClick={() => openTaskDetails(task.id)}
+                      >
+                        View Details
+                      </Button>
+                    </ActionGroup>
+                  </Cell>
+                </tr>
+              ))}
+            </Table>
+            {dashboardTasks.length === 0 && <EmptyState title="No tasks found for this view." />}
+          </Card>
+        </div>
+      );
+    }
 
     return (
       <div className="space-y-6">
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
-          <StatCard label="My Total Tasks" value={myTasks.length} />
-          <StatCard label="Pending" value={list("Pending").length} />
-          <StatCard label="In Progress" value={list("In Progress").length} />
-          <StatCard label="Failed" value={list("Failed").length} />
-          <StatCard label="Waiting for Approval" value={list("Waiting for Approval").length} />
-          <StatCard label="Complete" value={list("Complete").length} />
+          <DashboardNavCard
+            label="My Total Tasks"
+            value={myTasks.length}
+            onClick={() => setSelectedDeveloperDashboardView({ kind: "tasks", title: "All Tasks", filter: "all" })}
+          />
+          <DashboardNavCard
+            label="Pending"
+            value={list("Pending").length}
+            onClick={() => setSelectedDeveloperDashboardView({ kind: "tasks", title: "Pending Tasks", filter: "pending" })}
+          />
+          <DashboardNavCard
+            label="In Progress"
+            value={list("In Progress").length}
+            onClick={() => setSelectedDeveloperDashboardView({ kind: "tasks", title: "In Progress Tasks", filter: "in-progress" })}
+          />
+          <DashboardNavCard
+            label="Failed"
+            value={list("Failed").length}
+            onClick={() => setSelectedDeveloperDashboardView({ kind: "tasks", title: "Failed Tasks", filter: "failed" })}
+          />
+          <DashboardNavCard
+            label="Waiting for Approval"
+            value={list("Waiting for Approval").length}
+            onClick={() =>
+              setSelectedDeveloperDashboardView({
+                kind: "tasks",
+                title: "Waiting for Approval Tasks",
+                filter: "waiting-for-approval",
+              })
+            }
+          />
+          <DashboardNavCard
+            label="Complete"
+            value={list("Complete").length}
+            onClick={() => setSelectedDeveloperDashboardView({ kind: "tasks", title: "Completed Tasks", filter: "complete" })}
+          />
         </div>
+        {!activeClockSession && (
+          <div className="rounded-md border border-[#0B1F3A] bg-[#0B1F3A] px-5 py-4">
+            <p className="text-sm font-medium text-white">Please start working before making any task changes!</p>
+          </div>
+        )}
         <TaskListSection title="My Current Tasks" tasks={myTasks.filter((task) => ["Pending", "In Progress"].includes(task.status))} />
         <TaskListSection title="My Failed Tasks" tasks={list("Failed")} />
         <TaskListSection title="My Waiting for Approval Tasks" tasks={list("Waiting for Approval")} />
+        <Card className="border-[#BFDBFE] bg-white">
+          <SectionTitle title="Work History" />
+          {myWorkHistoryLoading ? (
+            <EmptyState title="Loading work history." />
+          ) : workSections.length === 0 ? (
+            <EmptyState title="No work sessions found." />
+          ) : (
+            <div className="space-y-4">
+              {workSections.map((section) => (
+                <div key={section.date} className="space-y-2">
+                  <Table headers={["Date", "Started", "Ended", "Total Worked"]}>
+                    {section.sessions.map((session) => (
+                      <tr key={session.id} className="hover:bg-neutral-50">
+                        <Cell>{session.date}</Cell>
+                        <Cell>{session.clockIn}</Cell>
+                        <Cell>{session.clockOut}</Cell>
+                        <Cell>{session.totalWorked}</Cell>
+                      </tr>
+                    ))}
+                  </Table>
+                  <div className="text-sm font-medium text-neutral-700">
+                    Daily total: {formatWorkedDuration(section.dailyTotalMs)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
       </div>
     );
   }
@@ -1651,7 +2305,9 @@ export default function Home() {
                   <Cell>
                     <StatusBadge status={task.status} />
                   </Cell>
-                  <Cell>{task.dueDate}</Cell>
+                  <Cell>
+                    <DueDateWarning task={task} compact />
+                  </Cell>
                   <Cell>{task.lastUpdated}</Cell>
                   <Cell>
                     <ActionGroup>
@@ -1715,7 +2371,9 @@ export default function Home() {
                 <Cell>
                   <StatusBadge status={task.status} />
                 </Cell>
-                <Cell>{task.dueDate}</Cell>
+                <Cell>
+                  <DueDateWarning task={task} compact />
+                </Cell>
                 <Cell>{task.createdDate}</Cell>
                 <Cell>
                   <ActionGroup>
@@ -1777,7 +2435,9 @@ export default function Home() {
   function TaskDetailsPage({ task }: { task: Task }) {
     const taskComments = comments.filter((comment) => comment.taskId === task.id);
     const taskHistory = history.filter((item) => item.taskId === task.id);
+    const taskAttachments = task.attachments ?? [];
     const canComment = authUser.role === "Admin" || task.developerId === authUser.id;
+    const canDeveloperChangeTask = authUser.role !== "Developer" || Boolean(activeClockSession);
     const returnLabel =
       taskReturnPage === "developer-dashboard"
         ? "My Dashboard"
@@ -1807,7 +2467,12 @@ export default function Home() {
           </div>
           <dl className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             <Info label="Assigned developer" value={developerName(task.developerId)} />
-            <Info label="Due date" value={task.dueDate} />
+            <div className="mb-4">
+              <dt className="text-xs font-semibold uppercase text-neutral-500">Due date</dt>
+              <dd className="mt-1 text-sm text-black">
+                <DueDateWarning task={task} />
+              </dd>
+            </div>
             <Info label="Created date" value={task.createdDate} />
             <Info label="Last updated" value={task.lastUpdated} />
             <Info label="Status" value={task.status} />
@@ -1823,38 +2488,57 @@ export default function Home() {
             <div className="mb-2 text-sm font-semibold">Description</div>
             <p className="text-sm text-neutral-700">{task.description}</p>
           </div>
+          <div className="mt-5">
+            <div className="mb-2 text-sm font-semibold">Attachments</div>
+            <TaskAttachmentList attachments={taskAttachments} />
+          </div>
         </Card>
 
         <Card>
           <SectionTitle title="Task Status Flow" />
-          <StatusTimeline current={task.status} />
+          <div className="flex items-center">
+            <StatusBadge status={task.status} />
+          </div>
         </Card>
 
         <Card>
           <SectionTitle title="Actions" />
           {authUser.role === "Developer" ? (
-            <ActionGroup>
-              {task.status === "Pending" && <Button onClick={() => changeTaskStatus(task.id, "In Progress")}>Start Task</Button>}
-              {task.status === "In Progress" && (
-                <>
-                  <Button variant="secondary" onClick={() => changeTaskStatus(task.id, "Failed")}>
-                    Mark as Failed
-                  </Button>
-                  <Button onClick={() => changeTaskStatus(task.id, "Waiting for Approval")}>Send for Approval</Button>
-                </>
-              )}
-              {task.status === "Failed" && (
-                <>
-                  <Button variant="secondary" onClick={() => changeTaskStatus(task.id, "In Progress")}>
-                    Remove Failed Status
-                  </Button>
-                  <Button onClick={() => changeTaskStatus(task.id, "Waiting for Approval")}>Send for Approval</Button>
-                </>
-              )}
-              <Button variant="secondary" onClick={() => setModal({ name: "edit-task", taskId: task.id })}>
-                Edit Task
-              </Button>
-            </ActionGroup>
+            canDeveloperChangeTask ? (
+              <ActionGroup>
+                {task.status === "Pending" && <Button onClick={() => changeTaskStatus(task.id, "In Progress")}>Start Task</Button>}
+                {task.status === "In Progress" && (
+                  <>
+                    <Button variant="secondary" onClick={() => changeTaskStatus(task.id, "Failed")}>
+                      Mark as Failed
+                    </Button>
+                    <Button onClick={() => changeTaskStatus(task.id, "Waiting for Approval")}>Send for Approval</Button>
+                  </>
+                )}
+                {task.status === "Failed" && (
+                  <>
+                    <Button variant="secondary" onClick={() => changeTaskStatus(task.id, "In Progress")}>
+                      Remove Failed Status
+                    </Button>
+                    <Button onClick={() => changeTaskStatus(task.id, "Waiting for Approval")}>Send for Approval</Button>
+                  </>
+                )}
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setTaskAttachmentMessage(null);
+                    setSelectedTaskAttachmentName("");
+                    setModal({ name: "upload-task-file", taskId: task.id });
+                  }}
+                >
+                  Upload File
+                </Button>
+              </ActionGroup>
+            ) : (
+              <div className="rounded-md border border-[#0B1F3A] bg-[#0B1F3A] px-4 py-3 text-sm font-medium text-white">
+                Please start working before making any task changes!
+              </div>
+            )
           ) : (
             <ActionGroup>
               <Button variant="secondary" onClick={() => setModal({ name: "edit-task", taskId: task.id })}>
@@ -1892,7 +2576,7 @@ export default function Home() {
               </div>
             ))}
           </div>
-          {canComment && (
+          {canComment && (authUser.role !== "Developer" || canDeveloperChangeTask) && (
             <form className="space-y-4" onSubmit={(event) => addComment(event, task.id)}>
               <Textarea label="Comment" name="text" required />
               <Select label="Comment type" name="type" defaultValue="Normal Comment">
@@ -1901,6 +2585,9 @@ export default function Home() {
               </Select>
               <Button type="submit">{authUser.role === "Admin" ? "Add Admin Comment" : "Add Comment"}</Button>
             </form>
+          )}
+          {canComment && authUser.role === "Developer" && !canDeveloperChangeTask && (
+            <div className="text-sm text-neutral-700">Please start working before making task changes.</div>
           )}
         </Card>
 
@@ -1939,7 +2626,7 @@ export default function Home() {
         </div>
         <Card>
           <Table headers={["Name", "Role", "Password", "Account Status", "Details", "Last Login", "Actions"]}>
-            {users.map((user) => (
+            {developers.map((user) => (
               <DeveloperRow key={user.id} user={user} />
             ))}
           </Table>
@@ -1976,9 +2663,11 @@ export default function Home() {
             <Button variant="secondary" onClick={() => setModal({ name: "edit-developer", userId: user.id })}>
               Edit User
             </Button>
-            <Button variant="secondary" onClick={() => setModal({ name: "change-password", userId: user.id })}>
-              Change Password
-            </Button>
+            {user.role === "Developer" && (
+              <Button variant="secondary" onClick={() => setModal({ name: "change-password", userId: user.id })}>
+                Change Password
+              </Button>
+            )}
           </ActionGroup>
         </Cell>
       </tr>
@@ -2044,38 +2733,7 @@ export default function Home() {
 
   function LoginHistoryModal({ user, onClose }: { user?: User; onClose: () => void }) {
     const records = user ? loginHistoryForUser(user.name) : [];
-    const workRows = developerWorkSessions.map((session) => {
-      const clockIn = new Date(session.clockInAt);
-      const clockOut = session.clockOutAt ? new Date(session.clockOutAt) : null;
-      const completedDuration = clockOut ? Math.max(0, clockOut.getTime() - clockIn.getTime()) : null;
-
-      return {
-        id: session.id,
-        date: formatWorkDate(session.clockInAt),
-        clockIn: formatWorkTime(session.clockInAt),
-        clockOut: clockOut ? formatWorkTime(session.clockOutAt as string) : "In progress",
-        totalWorked: completedDuration !== null ? formatWorkedDuration(completedDuration) : "In progress",
-        completedDuration
-      };
-    });
-
-    const workSections = workRows.reduce<
-      { date: string; sessions: typeof workRows; dailyTotalMs: number }[]
-    >((groups, row) => {
-      const existing = groups.find((group) => group.date === row.date);
-      if (existing) {
-        existing.sessions.push(row);
-        existing.dailyTotalMs += row.completedDuration ?? 0;
-        return groups;
-      }
-
-      groups.push({
-        date: row.date,
-        sessions: [row],
-        dailyTotalMs: row.completedDuration ?? 0
-      });
-      return groups;
-    }, []);
+    const workSections = buildWorkHistorySections(developerWorkSessions, clockTick);
 
     return (
       <Modal title={`${user?.name ?? "Developer"} History`} onClose={onClose} showCloseButton={false}>
@@ -2224,45 +2882,21 @@ export default function Home() {
     );
   }
 
-  function SettingsPage() {
-    return (
-      <div className="grid gap-6 xl:grid-cols-2">
-        <Card>
-          <SectionTitle title="Company Profile" />
-          <Info label="Company name" value="Key Pillar Ai" />
-          <Info label="App name" value="Audit Log & Task Tracking App" />
-        </Card>
-        <Card>
-          <SectionTitle title="App Theme" />
-          <Badge className="border-black bg-white text-black">Black and white selected</Badge>
-        </Card>
-        <Card>
-          <SectionTitle title="Password Management Rules" />
-          <RuleList items={["Email and password login", "Developers cannot change passwords", "Admin can change passwords"]} />
-        </Card>
-        <Card>
-          <SectionTitle title="Task Status Rules" />
-          <RuleList items={statuses} />
-        </Card>
-      </div>
-    );
-  }
-
   function TaskListSection({ title, tasks }: { title: string; tasks: Task[] }) {
     return (
-      <Card>
+      <Card className="border-[#BFDBFE] bg-white">
         <SectionTitle title={title} />
         <div className="grid gap-3">
           {tasks.length === 0 && <EmptyState title="No tasks in this section." />}
           {tasks.map((task) => (
             <div
               key={task.id}
-              className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4 sm:flex-row sm:items-center sm:justify-between"
+              className="flex flex-col gap-3 rounded-md border border-neutral-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between"
             >
               <div>
                 <div className="font-medium">{task.title}</div>
                 <div className="text-sm text-neutral-600">
-                  {projectName(task.projectId)} · Due {task.dueDate}
+                  {projectName(task.projectId)} · Due <DueDateWarning task={task} compact />
                 </div>
               </div>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -2272,7 +2906,7 @@ export default function Home() {
                   variant="secondary"
                   onClick={() => openTaskDetails(task.id)}
                 >
-                  Open task
+                  View Details
                 </Button>
               </div>
             </div>
@@ -2294,7 +2928,7 @@ export default function Home() {
             <p className="mt-1 text-sm text-neutral-600">{projectName(task.projectId)}</p>
             <p className="mt-3 text-sm text-neutral-700">{task.description}</p>
             <div className="mt-3 text-sm text-neutral-600">
-              Due {task.dueDate} · Last updated {task.lastUpdated}
+              Due <DueDateWarning task={task} compact /> · Last updated {task.lastUpdated}
             </div>
           </div>
           <div className="flex shrink-0 flex-col gap-3 sm:items-end">
@@ -2329,6 +2963,36 @@ export default function Home() {
       <Button variant="secondary" onClick={() => openProjectAttachment(project)}>
         {label}
       </Button>
+    );
+  }
+
+  function TaskAttachmentList({ attachments = [] }: { attachments?: TaskAttachment[] }) {
+    return (
+      <div className="space-y-2">
+        {attachments.length === 0 ? (
+          <div className="text-sm text-neutral-500">No uploaded files.</div>
+        ) : (
+          attachments.map((attachment) => (
+            <div
+              key={attachment.id}
+              className="flex flex-col gap-2 rounded-md border border-neutral-200 bg-neutral-50 p-3 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div>
+                <div className="text-sm font-medium text-black">{attachment.name}</div>
+                <div className="text-xs text-neutral-500">{attachment.uploadedAt}</div>
+              </div>
+              <a
+                href={attachment.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm font-medium text-[#0B1F3A] underline"
+              >
+                View / Download
+              </a>
+            </div>
+          ))
+        )}
+      </div>
     );
   }
 
@@ -2419,9 +3083,9 @@ export default function Home() {
                   ))}
                 </Select>
               )}
+              <DatePickerField label="Due date" name="dueDate" defaultValue={task?.dueDate} required />
             </>
           )}
-          <DatePickerField label="Due date" name="dueDate" defaultValue={task?.dueDate} required />
           {!task && <p className="text-sm text-neutral-600">Initial status will be Pending.</p>}
           <FormActions onCancel={onClose} />
         </form>
@@ -2546,7 +3210,7 @@ function DashboardNavCard({
     <button
       type="button"
       onClick={onClick}
-      className="rounded-md text-left transition hover:bg-neutral-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-black focus-visible:ring-offset-2"
+      className="group rounded-md text-left transition hover:-translate-y-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1D4ED8] focus-visible:ring-offset-2"
     >
       <StatCard label={label} value={value} />
     </button>

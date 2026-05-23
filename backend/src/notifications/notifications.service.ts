@@ -1,5 +1,5 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { AccountStatus, Role } from '@prisma/client';
+import { AccountStatus, Role, TaskStatus } from '@prisma/client';
 import type { AuthenticatedUser } from '../auth/auth-user';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -17,6 +17,8 @@ export class NotificationsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async listForUser(user: AuthenticatedUser) {
+    await this.ensureOverdueTaskNotifications(user.id);
+
     const notifications = await this.prisma.notification.findMany({
       where: { userId: user.id },
       orderBy: { createdAt: 'desc' },
@@ -39,6 +41,8 @@ export class NotificationsService {
   }
 
   async unreadCountForUser(user: AuthenticatedUser) {
+    await this.ensureOverdueTaskNotifications(user.id);
+
     const count = await this.prisma.notification.count({
       where: {
         userId: user.id,
@@ -90,6 +94,56 @@ export class NotificationsService {
 
   async notifyUsers(input: NotificationInput) {
     return this.createMany(input);
+  }
+
+  private async ensureOverdueTaskNotifications(userId: string) {
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const overdueTasks = await this.prisma.task.findMany({
+      where: {
+        assignedDeveloperId: userId,
+        deletedAt: null,
+        status: { not: TaskStatus.COMPLETE },
+        dueAt: { lt: startOfToday },
+      },
+      select: {
+        id: true,
+        title: true,
+      },
+    });
+
+    if (overdueTasks.length === 0) {
+      return;
+    }
+
+    const existingNotifications = await this.prisma.notification.findMany({
+      where: {
+        userId,
+        action: 'Task overdue',
+        entityType: 'Task',
+        entityId: { in: overdueTasks.map((task) => task.id) },
+      },
+      select: { entityId: true },
+    });
+
+    const existingTaskIds = new Set(existingNotifications.map((item) => item.entityId).filter(Boolean));
+    const missingTasks = overdueTasks.filter((task) => !existingTaskIds.has(task.id));
+
+    if (missingTasks.length === 0) {
+      return;
+    }
+
+    await this.prisma.notification.createMany({
+      data: missingTasks.map((task) => ({
+        userId,
+        action: 'Task overdue',
+        entityType: 'Task',
+        entityId: task.id,
+        title: 'Task overdue',
+        message: `Your task has crossed the due date: ${task.title}.`,
+      })),
+    });
   }
 
   private async createMany(input: NotificationInput) {

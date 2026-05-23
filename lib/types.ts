@@ -14,6 +14,14 @@ export type ProjectAttachment = {
   url: string;
 };
 
+export type TaskAttachment = {
+  id: string;
+  name: string;
+  url: string;
+  mimeType?: string;
+  uploadedAt: string;
+};
+
 export type ClockSession = {
   id: string;
   userId: string;
@@ -85,6 +93,7 @@ export type Task = {
   dueDate: string;
   createdDate: string;
   lastUpdated: string;
+  attachments: TaskAttachment[];
   deleted?: boolean;
 };
 

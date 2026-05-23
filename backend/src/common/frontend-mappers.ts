@@ -8,6 +8,7 @@ import {
   ProjectStatus,
   Role,
   Task,
+  TaskAttachment,
   TaskComment,
   TaskHistory,
   TaskStatus,
@@ -23,6 +24,7 @@ import {
   FrontendRole,
   FrontendStatus,
   FrontendTask,
+  FrontendTaskAttachment,
   FrontendUser,
 } from './frontend-types';
 
@@ -182,7 +184,17 @@ export function mapClockSession(session: ClockSession): FrontendClockSession {
   };
 }
 
-export function mapTask(task: Task): FrontendTask {
+export function mapTaskAttachment(attachment: TaskAttachment): FrontendTaskAttachment {
+  return {
+    id: attachment.id,
+    name: attachment.fileName,
+    url: attachment.storageUrl,
+    mimeType: attachment.mimeType ?? undefined,
+    uploadedAt: formatDateTime(attachment.createdAt),
+  };
+}
+
+export function mapTask(task: Task & { attachments?: TaskAttachment[] }): FrontendTask {
   return {
     id: task.id,
     title: task.title,
@@ -193,6 +205,7 @@ export function mapTask(task: Task): FrontendTask {
     dueDate: formatDate(task.dueAt),
     createdDate: formatDateTime(task.createdAt),
     lastUpdated: formatDateTime(task.updatedAt),
+    attachments: (task.attachments ?? []).map(mapTaskAttachment),
     deleted: Boolean(task.deletedAt),
   };
 }

@@ -22,6 +22,7 @@ export class AppStateService {
         }),
         this.prisma.task.findMany({
           where: { deletedAt: null },
+          include: { attachments: { orderBy: { createdAt: 'desc' } } },
           orderBy: { createdAt: 'asc' },
         }),
         this.prisma.taskComment.findMany({
@@ -53,6 +54,7 @@ export class AppStateService {
         deletedAt: null,
         assignedDeveloperId: user.id,
       },
+      include: { attachments: { orderBy: { createdAt: 'desc' } } },
       orderBy: { createdAt: 'asc' },
     });
     const taskIds = tasks.map((task) => task.id);

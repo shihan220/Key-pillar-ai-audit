@@ -1,7 +1,7 @@
-import bcrypt from 'bcrypt';
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { AccountStatus } from '@prisma/client';
-import { AuthenticatedUser } from '../auth/auth-user';
+import type { AuthenticatedUser } from '../auth/auth-user';
+import { hashPassword, verifyPassword } from '../auth/password.utils';
 import { accountStatusFromFrontend, roleFromFrontend } from '../common/frontend-mappers';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChangePasswordDto, CreateUserDto, UpdateUserDto } from './dto/user.dto';
@@ -13,7 +13,7 @@ export class UsersService {
   async createUser(user: AuthenticatedUser, body: CreateUserDto) {
     this.requireAdmin(user);
 
-    const passwordHash = await bcrypt.hash(body.password, 10);
+    const passwordHash = await hashPassword(body.password);
     const createdUser = await this.prisma.user.create({
       data: {
         name: body.name,
@@ -80,16 +80,28 @@ export class UsersService {
 
   async changePassword(userId: string, user: AuthenticatedUser, body: ChangePasswordDto) {
     this.requireAdmin(user);
-    if (body.password !== body.confirmPassword) {
-      throw new ForbiddenException('Passwords do not match.');
-    }
 
     const targetUser = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!targetUser) {
       throw new NotFoundException('User not found.');
     }
 
-    const passwordHash = await bcrypt.hash(body.password, 10);
+    if (body.password !== body.confirmPassword) {
+      throw new ForbiddenException('New password and confirm password do not match.');
+    }
+
+    if (userId === user.id) {
+      if (!body.currentPassword) {
+        throw new ForbiddenException('Current password is required.');
+      }
+
+      const currentPasswordMatches = await verifyPassword(body.currentPassword, targetUser.passwordHash);
+      if (!currentPasswordMatches) {
+        throw new ForbiddenException('Current password is incorrect.');
+      }
+    }
+
+    const passwordHash = await hashPassword(body.password);
     await this.prisma.user.update({
       where: { id: userId },
       data: {
@@ -102,7 +114,7 @@ export class UsersService {
         actorId: user.id,
         actorName: user.name,
         actorRole: user.role,
-        action: 'User password changed by admin',
+        action: userId === user.id ? 'Admin password changed from settings' : 'Developer password changed by admin',
         entityType: 'User',
         entityId: targetUser.id,
         entityName: targetUser.name,

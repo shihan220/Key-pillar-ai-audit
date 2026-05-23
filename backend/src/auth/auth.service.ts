@@ -1,4 +1,3 @@
-import bcrypt from 'bcrypt';
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { AccountStatus } from '@prisma/client';
@@ -6,6 +5,7 @@ import { mapUser } from '../common/frontend-mappers';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthenticatedUser, AuthTokenPayload } from './auth-user';
 import { LoginDto } from './dto/login.dto';
+import { hashPassword, isBcryptHash, verifyPassword } from './password.utils';
 
 @Injectable()
 export class AuthService {
@@ -25,32 +25,56 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email, password, or inactive account.');
     }
 
-    const matches = await bcrypt.compare(body.password, user.passwordHash);
+    let matches = false;
+    try {
+      matches = await verifyPassword(body.password, user.passwordHash);
+    } catch (error) {
+      console.error('[auth.login] Password verification failed.', error);
+      matches = false;
+    }
     if (!matches) {
       throw new UnauthorizedException('Invalid email, password, or inactive account.');
     }
 
     const now = new Date();
-    const updatedUser = await this.prisma.user.update({
-      where: { id: user.id },
-      data: { lastLoginAt: now },
-    });
+    let sessionUser = user;
 
-    await this.prisma.auditLog.create({
-      data: {
-        actorId: updatedUser.id,
-        actorName: updatedUser.name,
-        actorRole: updatedUser.role,
-        action: 'User logged in',
-        entityType: 'User',
-        entityId: updatedUser.id,
-        entityName: updatedUser.name,
-      },
-    });
+    try {
+      const updateData: { lastLoginAt: Date; passwordHash?: string } = {
+        lastLoginAt: now,
+      };
+
+      if (!isBcryptHash(user.passwordHash)) {
+        updateData.passwordHash = await hashPassword(body.password);
+      }
+
+      sessionUser = await this.prisma.user.update({
+        where: { id: user.id },
+        data: updateData,
+      });
+    } catch (error) {
+      console.error('[auth.login] Failed to update last login timestamp.', error);
+    }
+
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          actorId: sessionUser.id,
+          actorName: sessionUser.name,
+          actorRole: sessionUser.role,
+          action: 'User logged in',
+          entityType: 'User',
+          entityId: sessionUser.id,
+          entityName: sessionUser.name,
+        },
+      });
+    } catch (error) {
+      console.error('[auth.login] Failed to record login audit log.', error);
+    }
 
     return {
-      user: mapUser(updatedUser),
-      accessToken: await this.signToken(updatedUser.id, updatedUser.email, updatedUser.role),
+      user: mapUser(sessionUser),
+      accessToken: await this.signToken(sessionUser.id, sessionUser.email, sessionUser.role),
     };
   }
 
