@@ -6,3 +6,5 @@ build
 .env.local
 .DS_Store
 generated/prisma
+.env.production
+.env.production.backup
