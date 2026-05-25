@@ -1122,6 +1122,14 @@ export default function Home() {
       await refreshState(currentUser.id);
       setDeleteUserId(null);
     } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.toLowerCase().includes("tasks are still assigned")) {
+        setDeleteUserId(null);
+        window.alert(
+          "The developer is assigned with a Task\n\nIf you want to delete this user please reassign the task or remove the task !"
+        );
+        return;
+      }
       showActionError(error, "Failed to delete account.");
     }
   };
