@@ -520,6 +520,7 @@ export default function Home() {
   const selectedTask = selectedTaskId ? activeTasks.find((task) => task.id === selectedTaskId) : activeTasks[0];
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
   const developers = users.filter((user) => user.role === "Developer");
+  const managedUsers = users.filter((user) => user.id !== authUser?.id);
   const activeClockDuration = useMemo(() => {
     if (!activeClockSession) return "";
     const startedAt = Date.parse(activeClockSession.clockInAt);
@@ -2568,15 +2569,16 @@ export default function Home() {
     return (
       <div className="space-y-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <h2 className="text-xl font-semibold">Developers</h2>
+          <h2 className="text-xl font-semibold">Users</h2>
           <Button onClick={() => setModal({ name: "create-developer" })}>Create User</Button>
         </div>
         <Card>
           <Table headers={["Name", "Role", "Password", "Account Status", "Details", "Last Login", "Actions"]}>
-            {developers.map((user) => (
+            {managedUsers.map((user) => (
               <DeveloperRow key={user.id} user={user} />
             ))}
           </Table>
+          {managedUsers.length === 0 && <EmptyState title="No users found." />}
         </Card>
       </div>
     );
