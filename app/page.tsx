@@ -520,6 +520,7 @@ export default function Home() {
   const selectedTask = selectedTaskId ? activeTasks.find((task) => task.id === selectedTaskId) : activeTasks[0];
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
   const developers = users.filter((user) => user.role === "Developer");
+  const managedUsers = users.filter((user) => user.id !== currentUser?.id);
   const activeClockDuration = useMemo(() => {
     if (!activeClockSession) return "";
     const startedAt = Date.parse(activeClockSession.clockInAt);
@@ -853,6 +854,7 @@ export default function Home() {
     const developerOnly: Page[] = ["developer-dashboard", "my-tasks", "help"];
     if (currentUser.role === "Developer" && adminOnly.includes(nextPage)) return;
     if (currentUser.role === "Admin" && developerOnly.includes(nextPage)) return;
+    setNotificationsOpen(false);
     setSelectedDashboardView(null);
     setSelectedDeveloperDashboardView(null);
     if (nextPage === "projects") {
@@ -1306,8 +1308,6 @@ export default function Home() {
   }
 
   const authUser = currentUser;
-  const notificationBadgeText =
-    notificationUnreadCount > 99 ? "99+" : notificationUnreadCount > 0 ? String(notificationUnreadCount) : "";
 
   const navItems =
     authUser.role === "Admin"
@@ -1388,57 +1388,6 @@ export default function Home() {
             <h1 className="truncate text-lg font-semibold sm:text-xl">{pageTitle}</h1>
           </div>
           <div className="flex items-center gap-3">
-            {
-              <div className="relative">
-                <button
-                  type="button"
-                  aria-label="Notifications"
-                  onClick={() => setNotificationsOpen((value) => !value)}
-                  className="relative flex h-10 w-10 items-center justify-center rounded-md border border-neutral-300 bg-white text-lg text-black hover:bg-neutral-100"
-                >
-                  <span aria-hidden="true">🔔</span>
-                  {notificationBadgeText && (
-                    <span className="absolute -right-1 -top-1 inline-flex min-h-5 min-w-5 items-center justify-center rounded-full bg-black px-1.5 text-[11px] font-semibold text-white">
-                      {notificationBadgeText}
-                    </span>
-                  )}
-                </button>
-                {notificationsOpen && (
-                  <div className="absolute right-0 top-full z-30 mt-2 w-80 overflow-hidden rounded-md border border-neutral-200 bg-white shadow-sm">
-                    <div className="border-b border-neutral-200 px-4 py-3">
-                      <div className="text-sm font-semibold text-black">Notifications</div>
-                    </div>
-                    <div className="max-h-96 overflow-y-auto">
-                      {notifications.length > 0 ? (
-                        notifications.map((notification) => (
-                          <button
-                            key={notification.id}
-                            type="button"
-                            onClick={() => {
-                              setNotificationsOpen(false);
-                              void openNotification(notification);
-                            }}
-                            className={`block w-full border-b border-neutral-200 px-4 py-3 text-left hover:bg-neutral-50 ${
-                              notification.isRead ? "bg-white" : "bg-neutral-50"
-                            }`}
-                          >
-                            <div className={`text-sm ${notification.isRead ? "font-medium" : "font-semibold"}`}>
-                              {notification.title}
-                            </div>
-                            <div className="mt-1 text-sm text-neutral-600">{notification.message}</div>
-                            <div className="mt-2 text-xs text-neutral-500">
-                              {notification.entityType} · {formatNotificationDateTime(notification.createdAt)}
-                            </div>
-                          </button>
-                        ))
-                      ) : (
-                        <div className="px-4 py-6 text-sm text-neutral-600">No notifications available.</div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            }
             {authUser.role === "Developer" && (
               activeClockSession ? (
                 <div className="text-right text-sm">
@@ -2629,15 +2578,16 @@ export default function Home() {
     return (
       <div className="space-y-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <h2 className="text-xl font-semibold">Developers</h2>
+          <h2 className="text-xl font-semibold">Users</h2>
           <Button onClick={() => setModal({ name: "create-developer" })}>Create User</Button>
         </div>
         <Card>
           <Table headers={["Name", "Role", "Password", "Account Status", "Details", "Last Login", "Actions"]}>
-            {developers.map((user) => (
+            {managedUsers.map((user) => (
               <DeveloperRow key={user.id} user={user} />
             ))}
           </Table>
+          {managedUsers.length === 0 && <EmptyState title="No users found." />}
         </Card>
       </div>
     );
