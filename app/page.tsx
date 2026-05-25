@@ -520,7 +520,7 @@ export default function Home() {
   const selectedTask = selectedTaskId ? activeTasks.find((task) => task.id === selectedTaskId) : activeTasks[0];
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
   const developers = users.filter((user) => user.role === "Developer");
-  const managedUsers = users.filter((user) => user.id !== authUser?.id);
+  const managedUsers = users.filter((user) => user.id !== currentUser?.id);
   const activeClockDuration = useMemo(() => {
     if (!activeClockSession) return "";
     const startedAt = Date.parse(activeClockSession.clockInAt);

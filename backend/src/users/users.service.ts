@@ -136,12 +136,29 @@ export class UsersService {
       throw new NotFoundException('User not found.');
     }
 
-    await this.prisma.user.update({
+    const [assignedTaskCount, commentCount] = await this.prisma.$transaction([
+      this.prisma.task.count({
+        where: {
+          assignedDeveloperId: userId,
+        },
+      }),
+      this.prisma.taskComment.count({
+        where: {
+          authorId: userId,
+        },
+      }),
+    ]);
+
+    if (assignedTaskCount > 0) {
+      throw new ForbiddenException('Cannot delete this user while tasks are still assigned. Reassign or remove the tasks first.');
+    }
+
+    if (commentCount > 0) {
+      throw new ForbiddenException('Cannot delete this user while task comments still exist.');
+    }
+
+    await this.prisma.user.delete({
       where: { id: userId },
-      data: {
-        accountStatus: AccountStatus.INACTIVE,
-        deactivatedAt: new Date(),
-      },
     });
 
     await this.prisma.auditLog.create({
