@@ -136,15 +136,11 @@ export class UsersService {
       throw new NotFoundException('User not found.');
     }
 
-    const [assignedTaskCount, commentCount] = await this.prisma.$transaction([
+    const [assignedTaskCount] = await this.prisma.$transaction([
       this.prisma.task.count({
         where: {
           assignedDeveloperId: userId,
-        },
-      }),
-      this.prisma.taskComment.count({
-        where: {
-          authorId: userId,
+          deletedAt: null,
         },
       }),
     ]);
@@ -153,24 +149,35 @@ export class UsersService {
       throw new ForbiddenException('Cannot delete this user while tasks are still assigned. Reassign or remove the tasks first.');
     }
 
-    if (commentCount > 0) {
-      throw new ForbiddenException('Cannot delete this user while task comments still exist.');
-    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.taskComment.deleteMany({
+        where: {
+          authorId: userId,
+        },
+      });
 
-    await this.prisma.user.delete({
-      where: { id: userId },
-    });
+      await tx.task.deleteMany({
+        where: {
+          assignedDeveloperId: userId,
+          deletedAt: { not: null },
+        },
+      });
 
-    await this.prisma.auditLog.create({
-      data: {
-        actorId: user.id,
-        actorName: user.name,
-        actorRole: user.role,
-        action: 'User account deleted',
-        entityType: 'User',
-        entityId: existingUser.id,
-        entityName: existingUser.name,
-      },
+      await tx.user.delete({
+        where: { id: userId },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          actorName: user.name,
+          actorRole: user.role,
+          action: 'User account deleted',
+          entityType: 'User',
+          entityId: existingUser.id,
+          entityName: existingUser.name,
+        },
+      });
     });
 
     return { success: true };

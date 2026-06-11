@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { CommentType, Prisma, Task, TaskStatus } from '@prisma/client';
 import type { AuthenticatedUser } from '../auth/auth-user';
 import { commentTypeFromFrontend, parseDateInput, taskStatusFromFrontend } from '../common/frontend-mappers';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddCommentDto, ChangeTaskStatusDto, CreateTaskDto, ReassignTaskDto, UpdateTaskDto } from './dto/task.dto';
 
@@ -16,7 +17,10 @@ type UploadedAttachment = {
 
 @Injectable()
 export class TasksService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notificationsService: NotificationsService,
+  ) {}
 
   async createTask(user: AuthenticatedUser, body: CreateTaskDto) {
     this.requireAdmin(user);
@@ -181,6 +185,13 @@ export class TasksService {
     });
 
     await this.recordTaskEvent(task, user, 'Task status changed', this.frontStatus(task.status), this.frontStatus(nextStatus));
+    await this.notificationsService.notifyAdmins(
+      'Developer task status changed',
+      'Task',
+      task.id,
+      'Developer updated a task',
+      `${user.name} changed the status of ${task.title} to ${this.frontStatus(nextStatus)}.`,
+    );
     return { success: true };
   }
 
@@ -200,6 +211,15 @@ export class TasksService {
     });
 
     await this.recordTaskEvent(task, user, 'Failed status removed', 'Failed', 'In Progress');
+    if (user.role !== 'ADMIN') {
+      await this.notificationsService.notifyAdmins(
+        'Developer removed failed status',
+        'Task',
+        task.id,
+        'Developer resumed a task',
+        `${user.name} moved ${task.title} back to In Progress.`,
+      );
+    }
     return { success: true };
   }
 
@@ -222,6 +242,15 @@ export class TasksService {
 
     const action = commentType === CommentType.ISSUE_COMMENT ? 'Issue comment added' : 'Comment added';
     await this.recordTaskEvent(task, user, action, undefined, body.text);
+    if (user.role !== 'ADMIN') {
+      await this.notificationsService.notifyAdmins(
+        commentType === CommentType.ISSUE_COMMENT ? 'Developer issue comment added' : 'Developer comment added',
+        'Task',
+        task.id,
+        commentType === CommentType.ISSUE_COMMENT ? 'Developer raised an issue' : 'Developer added a comment',
+        `${user.name} added ${commentType === CommentType.ISSUE_COMMENT ? 'an issue comment' : 'a comment'} on ${task.title}.`,
+      );
+    }
     return { success: true };
   }
 
@@ -244,6 +273,15 @@ export class TasksService {
     });
 
     await this.recordTaskEvent(task, user, 'Task attachment uploaded', undefined, attachment.name);
+    if (user.role !== 'ADMIN') {
+      await this.notificationsService.notifyAdmins(
+        'Developer task attachment uploaded',
+        'Task',
+        task.id,
+        'Developer uploaded a file',
+        `${user.name} uploaded ${attachment.name} to ${task.title}.`,
+      );
+    }
     return { success: true, id: createdAttachment.id };
   }
 

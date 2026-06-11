@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Delete, Get, Param, UseGuards } from '@nestjs/common';
 import { CurrentUser } from '../auth/current-user.decorator';
 import type { AuthenticatedUser } from '../auth/auth-user';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -12,5 +12,15 @@ export class AuditLogsController {
   @Get()
   getLogs(@CurrentUser() user: AuthenticatedUser) {
     return this.auditLogsService.getLogs(user);
+  }
+
+  @Delete()
+  clearAll(@CurrentUser() user: AuthenticatedUser) {
+    return this.auditLogsService.clearAllLogs(user);
+  }
+
+  @Delete('user/:userName')
+  clearForUser(@CurrentUser() user: AuthenticatedUser, @Param('userName') userName: string) {
+    return this.auditLogsService.clearLogsForUser(user, decodeURIComponent(userName));
   }
 }

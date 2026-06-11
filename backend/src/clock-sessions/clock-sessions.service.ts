@@ -2,11 +2,15 @@ import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/com
 import { Role } from '@prisma/client';
 import { AuthenticatedUser } from '../auth/auth-user';
 import { mapClockSession } from '../common/frontend-mappers';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class ClockSessionsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notificationsService: NotificationsService,
+  ) {}
 
   async clockIn(user: AuthenticatedUser) {
     this.requireDeveloper(user);
@@ -40,6 +44,14 @@ export class ClockSessionsService {
         entityName: user.name,
       },
     });
+
+    await this.notificationsService.notifyAdmins(
+      'Developer clocked in',
+      'Clock Session',
+      session.id,
+      'Developer started working',
+      `${user.name} clocked in and started working.`,
+    );
 
     return { session: mapClockSession(session) };
   }
@@ -77,6 +89,14 @@ export class ClockSessionsService {
         entityName: user.name,
       },
     });
+
+    await this.notificationsService.notifyAdmins(
+      'Developer clocked out',
+      'Clock Session',
+      session.id,
+      'Developer finished working',
+      `${user.name} clocked out and finished the work session.`,
+    );
 
     return { session: mapClockSession(session) };
   }

@@ -92,6 +92,25 @@ export class NotificationsService {
     });
   }
 
+  async notifyDevelopers(action: string, entityType: string, entityId: string | null | undefined, title: string, message: string) {
+    const developers = await this.prisma.user.findMany({
+      where: {
+        role: Role.DEVELOPER,
+        accountStatus: AccountStatus.ACTIVE,
+      },
+      select: { id: true },
+    });
+
+    return this.createMany({
+      userIds: developers.map((item) => item.id),
+      action,
+      entityType,
+      entityId,
+      title,
+      message,
+    });
+  }
+
   async notifyUsers(input: NotificationInput) {
     return this.createMany(input);
   }

@@ -43,6 +43,28 @@ export type Notification = {
   updatedAt: string;
 };
 
+export type GitHubWorkspaceDeveloper = {
+  login: string;
+  name: string;
+  avatarUrl?: string;
+  initials: string;
+};
+
+export type GitHubWorkspaceRepository = {
+  id: string;
+  fullName: string;
+  name: string;
+  language: string;
+  updatedAt: string;
+  url: string;
+  workingDevelopers: GitHubWorkspaceDeveloper[];
+};
+
+export type GitHubWorkspace = {
+  repositories: GitHubWorkspaceRepository[];
+  refreshedAt: string;
+};
+
 export type User = {
   id: string;
   name: string;

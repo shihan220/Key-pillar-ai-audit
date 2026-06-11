@@ -1,4 +1,4 @@
-import { AuditLog, ClockSession, Comment, HistoryItem, Notification, Project, Task, User } from "./types";
+import { AuditLog, ClockSession, Comment, GitHubWorkspace, HistoryItem, Notification, Project, Task, User } from "./types";
 
 const configuredApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
 const isProduction = process.env.NODE_ENV === "production";
@@ -152,12 +152,32 @@ export function fetchNotifications() {
   return request<{ notifications: Notification[] }>("/notifications");
 }
 
+export function fetchGitHubWorkspace() {
+  return request<GitHubWorkspace>("/github-workspace");
+}
+
+export function addGitHubRepository(url: string, accessToken: string) {
+  return request<{ success: boolean; id: string; updated?: boolean }>("/github-workspace", "POST", { url, accessToken });
+}
+
+export function deleteGitHubRepository(repositoryId: string) {
+  return request<{ success: boolean }>(`/github-workspace/${repositoryId}`, "DELETE");
+}
+
 export function fetchNotificationUnreadCount() {
   return request<{ count: number }>("/notifications/unread-count");
 }
 
 export function markNotificationAsRead(notificationId: string) {
   return request<{ success: boolean }>(`/notifications/${notificationId}/read`, "POST");
+}
+
+export function clearAllAuditLogs() {
+  return request<{ success: boolean }>(`/audit-logs`, "DELETE");
+}
+
+export function clearAuditLogsForUser(userName: string) {
+  return request<{ success: boolean; count: number }>(`/audit-logs/user/${encodeURIComponent(userName)}`, "DELETE");
 }
 
 export function fetchUserClockHistory(userId: string) {

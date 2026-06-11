@@ -59,6 +59,7 @@ model User {
   auditLogs                  AuditLog[]          @relation("AuditLogActor")
   clockSessions              ClockSession[]
   notifications              Notification[]
+  addedGitWorkspaceRepos     GitWorkspaceRepository[] @relation("GitWorkspaceRepositoryAddedBy")
 
   @@map("users")
 }
@@ -239,4 +240,21 @@ model Notification {
   @@index([userId, isRead, createdAt])
   @@index([entityType, entityId])
   @@map("notifications")
+}
+
+model GitWorkspaceRepository {
+  id                   String   @id @default(cuid())
+  owner                String
+  name                 String
+  fullName             String   @unique @map("full_name")
+  accessTokenEncrypted String?  @map("access_token_encrypted")
+  addedById            String?  @map("added_by_id")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  addedBy User? @relation("GitWorkspaceRepositoryAddedBy", fields: [addedById], references: [id], onDelete: SetNull)
+
+  @@index([owner, name])
+  @@index([addedById])
+  @@map("git_workspace_repositories")
 }

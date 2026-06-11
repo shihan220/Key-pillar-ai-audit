@@ -31,6 +31,28 @@ export type FrontendClockSession = {
   updatedAt: string;
 };
 
+export type FrontendGithubWorkspaceDeveloper = {
+  login: string;
+  name: string;
+  avatarUrl?: string;
+  initials: string;
+};
+
+export type FrontendGithubWorkspaceRepository = {
+  id: string;
+  fullName: string;
+  name: string;
+  language: string;
+  updatedAt: string;
+  url: string;
+  workingDevelopers: FrontendGithubWorkspaceDeveloper[];
+};
+
+export type FrontendGithubWorkspace = {
+  repositories: FrontendGithubWorkspaceRepository[];
+  refreshedAt: string;
+};
+
 export type FrontendUser = {
   id: string;
   name: string;

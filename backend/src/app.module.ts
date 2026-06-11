@@ -5,6 +5,7 @@ import { AppStateModule } from './app-state/app-state.module';
 import { AuditLogsModule } from './audit-logs/audit-logs.module';
 import { AuthModule } from './auth/auth.module';
 import { ClockSessionsModule } from './clock-sessions/clock-sessions.module';
+import { GitHubWorkspaceModule } from './github-workspace/github-workspace.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProjectsModule } from './projects/projects.module';
@@ -18,6 +19,7 @@ import { UsersModule } from './users/users.module';
     AuditLogsModule,
     AuthModule,
     ClockSessionsModule,
+    GitHubWorkspaceModule,
     NotificationsModule,
     ProjectsModule,
     TasksModule,

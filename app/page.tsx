@@ -20,19 +20,24 @@ import {
 import {
   addComment as apiAddComment,
   approveTask as apiApproveTask,
+  addGitHubRepository as apiAddGitHubRepository,
   changeTaskStatus as apiChangeTaskStatus,
   changeUserPassword,
+  clearAllAuditLogs as apiClearAllAuditLogs,
+  clearAuditLogsForUser as apiClearAuditLogsForUser,
   clearAuthSession,
   clockIn as apiClockIn,
   clockOut as apiClockOut,
   createProject as apiCreateProject,
   createTask as apiCreateTask,
   createUser as apiCreateUser,
+  deleteGitHubRepository as apiDeleteGitHubRepository,
   deleteUserAccount as apiDeleteUserAccount,
   deleteProject as apiDeleteProject,
   deleteTask as apiDeleteTask,
   fetchAppState,
   fetchClockHistory,
+  fetchGitHubWorkspace as apiFetchGitHubWorkspace,
   fetchNotifications as apiFetchNotifications,
   fetchUserClockHistory,
   getStoredUser,
@@ -51,6 +56,7 @@ import {
   AuditLog,
   ClockSession,
   Comment,
+  GitHubWorkspace,
   HistoryItem,
   Notification,
   Project,
@@ -65,6 +71,7 @@ import {
 type Page =
   | "admin-dashboard"
   | "developer-dashboard"
+  | "git-workspace"
   | "projects"
   | "tasks"
   | "my-tasks"
@@ -238,6 +245,16 @@ function formatNotificationDateTime(value: string) {
   })
     .format(parsed)
     .toUpperCase();
+}
+
+function formatGitHubUpdatedDate(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  }).format(parsed);
 }
 
 function normalizeDate(value: Date) {
@@ -465,6 +482,12 @@ export default function Home() {
   const [comments, setComments] = useState<Comment[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [githubWorkspace, setGitHubWorkspace] = useState<GitHubWorkspace | null>(null);
+  const [githubWorkspaceLoading, setGitHubWorkspaceLoading] = useState(false);
+  const [githubWorkspaceMessage, setGitHubWorkspaceMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [gitRepositoryUrl, setGitRepositoryUrl] = useState("");
+  const [gitAccessToken, setGitAccessToken] = useState("");
+  const [deleteGitRepositoryId, setDeleteGitRepositoryId] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -502,6 +525,8 @@ export default function Home() {
   const [settingsCurrentPassword, setSettingsCurrentPassword] = useState("");
   const [settingsNewPassword, setSettingsNewPassword] = useState("");
   const [settingsConfirmPassword, setSettingsConfirmPassword] = useState("");
+  const [settingsAuditMessage, setSettingsAuditMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [selectedAuditUserName, setSelectedAuditUserName] = useState("");
   const [taskAttachmentMessage, setTaskAttachmentMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [selectedTaskAttachmentName, setSelectedTaskAttachmentName] = useState("");
   const [myWorkSessions, setMyWorkSessions] = useState<ClockSession[]>([]);
@@ -521,6 +546,23 @@ export default function Home() {
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
   const developers = users.filter((user) => user.role === "Developer");
   const managedUsers = users.filter((user) => user.id !== currentUser?.id);
+  const auditLogUserOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          auditLogs
+            .flatMap((log) => {
+              const names = [log.user];
+              if (log.entityType === "User" && log.entityName) {
+                names.push(log.entityName);
+              }
+              return names;
+            })
+            .filter(Boolean),
+        ),
+      ).sort((a, b) => a.localeCompare(b)),
+    [auditLogs],
+  );
   const activeClockDuration = useMemo(() => {
     if (!activeClockSession) return "";
     const startedAt = Date.parse(activeClockSession.clockInAt);
@@ -604,6 +646,12 @@ export default function Home() {
     } finally {
       setIsAppLoading(false);
     }
+  };
+
+  const refreshGitHubWorkspace = async () => {
+    const workspace = await apiFetchGitHubWorkspace();
+    setGitHubWorkspace(workspace);
+    return workspace;
   };
 
   const showActionError = (error: unknown, fallback = "Request failed.") => {
@@ -691,6 +739,9 @@ export default function Home() {
 
   useEffect(() => {
     if (!currentUser) {
+      setGitHubWorkspace(null);
+      setGitHubWorkspaceLoading(false);
+      setGitHubWorkspaceMessage(null);
       setNotifications([]);
       setNotificationUnreadCount(0);
       setNotificationsOpen(false);
@@ -712,6 +763,36 @@ export default function Home() {
         setNotificationUnreadCount(0);
         setSelectedNotification(null);
         console.error(error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+
+    let cancelled = false;
+    setGitHubWorkspaceLoading(true);
+
+    void apiFetchGitHubWorkspace()
+      .then((workspace) => {
+        if (cancelled) return;
+        setGitHubWorkspace(workspace);
+        setGitHubWorkspaceMessage(null);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setGitHubWorkspace({ repositories: [], refreshedAt: new Date().toISOString() });
+        setGitHubWorkspaceMessage({
+          type: "error",
+          text: error instanceof Error ? error.message : "Failed to load GitHub workspace.",
+        });
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setGitHubWorkspaceLoading(false);
       });
 
     return () => {
@@ -1158,6 +1239,44 @@ export default function Home() {
     }
   };
 
+  const addGitRepository = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!currentUser || currentUser.role !== "Admin") return;
+
+    try {
+      const result = await apiAddGitHubRepository(gitRepositoryUrl, gitAccessToken);
+      await refreshGitHubWorkspace();
+      setGitRepositoryUrl("");
+      setGitAccessToken("");
+      setGitHubWorkspaceMessage({
+        type: "success",
+        text: result.updated ? "Repository access updated successfully." : "Repository added successfully.",
+      });
+    } catch (error) {
+      setGitHubWorkspaceMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Failed to add repository.",
+      });
+    }
+  };
+
+  const deleteGitRepository = async (repositoryId: string) => {
+    if (!currentUser || currentUser.role !== "Admin") return;
+
+    try {
+      await apiDeleteGitHubRepository(repositoryId);
+      await refreshGitHubWorkspace();
+      setDeleteGitRepositoryId(null);
+      setGitHubWorkspaceMessage({ type: "success", text: "Repository removed successfully." });
+    } catch (error) {
+      setDeleteGitRepositoryId(null);
+      setGitHubWorkspaceMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Failed to remove repository.",
+      });
+    }
+  };
+
   const updateAdminPasswordFromSettings = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!currentUser || currentUser.role !== "Admin") return;
@@ -1196,6 +1315,50 @@ export default function Home() {
       setSettingsPasswordMessage({
         type: "error",
         text: error instanceof Error ? error.message : "Failed to update admin password."
+      });
+    }
+  };
+
+  const clearAllAuditHistory = async () => {
+    if (!currentUser || currentUser.role !== "Admin") return;
+    if (!window.confirm("Are you sure you want to clear the whole audit log history?")) return;
+
+    try {
+      await apiClearAllAuditLogs();
+      await refreshState(currentUser.id);
+      setSelectedAuditUserName("");
+      setSettingsAuditMessage({ type: "success", text: "Audit log history cleared successfully." });
+    } catch (error) {
+      setSettingsAuditMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Failed to clear audit log history.",
+      });
+    }
+  };
+
+  const clearSelectedUserAuditHistory = async () => {
+    if (!currentUser || currentUser.role !== "Admin") return;
+    if (!selectedAuditUserName) {
+      setSettingsAuditMessage({ type: "error", text: "Select a user audit history first." });
+      return;
+    }
+    if (!window.confirm(`Are you sure you want to clear audit logs for ${selectedAuditUserName}?`)) return;
+
+    try {
+      const result = await apiClearAuditLogsForUser(selectedAuditUserName);
+      await refreshState(currentUser.id);
+      setSettingsAuditMessage({
+        type: "success",
+        text:
+          result.count > 0
+            ? `Removed ${result.count} audit log entr${result.count === 1 ? "y" : "ies"} for ${selectedAuditUserName}.`
+            : `No audit log entries found for ${selectedAuditUserName}.`,
+      });
+      setSelectedAuditUserName("");
+    } catch (error) {
+      setSettingsAuditMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Failed to clear selected user audit history.",
       });
     }
   };
@@ -1313,6 +1476,7 @@ export default function Home() {
     authUser.role === "Admin"
       ? [
           ["admin-dashboard", "Dashboard"],
+          ["git-workspace", "Git Workspace"],
           ["projects", "Projects"],
           ["tasks", "Tasks"],
           ["developers", "Developers"],
@@ -1321,13 +1485,14 @@ export default function Home() {
         ]
       : [
           ["developer-dashboard", "My Dashboard"],
+          ["git-workspace", "Git Workspace"],
           ["my-tasks", "My Tasks"],
           ["help", "Help"]
         ];
 
   const pageTitle =
     navItems.find(([key]) => key === page)?.[1] ??
-    (page === "task-details" ? "Task Details" : page === "projects" ? "Projects" : "Dashboard");
+    (page === "task-details" ? "Task Details" : page === "projects" ? "Projects" : page === "git-workspace" ? "Git Workspace" : "Dashboard");
   const settingsAdminUser = users.find((user) => user.id === authUser.id) ?? authUser;
 
   return (
@@ -1499,6 +1664,7 @@ export default function Home() {
             ))}
           {page === "developers" && <DevelopersPage />}
           {page === "audit-logs" && <AuditLogsPage />}
+          {page === "git-workspace" && <GitWorkspacePage />}
           {page === "settings" && (
             <div className="space-y-6">
               <Card className="border-[#BFDBFE] bg-white">
@@ -1585,6 +1751,62 @@ export default function Home() {
                     <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Backend</div>
                     <div className="mt-1 text-sm text-[#111827]">Connected</div>
                   </div>
+                </div>
+              </Card>
+
+              <Card className="border-[#BFDBFE] bg-white">
+                <SectionTitle title="Audit Log Management" />
+                <div className="space-y-4">
+                  <div className="rounded-md border border-neutral-200 bg-neutral-50 p-4">
+                    <div className="text-sm font-medium text-black">Clear Entire Audit History</div>
+                    <p className="mt-1 text-sm text-neutral-600">
+                      Remove all audit log records from the system.
+                    </p>
+                    <div className="mt-4">
+                      <Button variant="danger" onClick={clearAllAuditHistory}>
+                        Clear All Audit Logs
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-md border border-neutral-200 bg-neutral-50 p-4">
+                    <div className="text-sm font-medium text-black">Clear Selected User Audit History</div>
+                    <p className="mt-1 text-sm text-neutral-600">
+                      Remove audit log records for a specific user after the account has been deleted.
+                    </p>
+                    <div className="mt-4 grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                      <Select
+                        label="User audit history"
+                        value={selectedAuditUserName}
+                        onChange={(event) => {
+                          setSelectedAuditUserName(event.target.value);
+                          if (settingsAuditMessage) setSettingsAuditMessage(null);
+                        }}
+                      >
+                        <option value="">Select user</option>
+                        {auditLogUserOptions.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </Select>
+                      <Button variant="danger" onClick={clearSelectedUserAuditHistory}>
+                        Clear Selected User Logs
+                      </Button>
+                    </div>
+                  </div>
+
+                  {settingsAuditMessage && (
+                    <div
+                      className={`rounded-md border px-3 py-2 text-sm ${
+                        settingsAuditMessage.type === "success"
+                          ? "border-[#BFDBFE] bg-[#EFF6FF] text-[#111827]"
+                          : "border-red-200 bg-red-50 text-red-700"
+                      }`}
+                    >
+                      {settingsAuditMessage.text}
+                    </div>
+                  )}
                 </div>
               </Card>
             </div>
@@ -1738,6 +1960,15 @@ export default function Home() {
           cancelLabel="Cancel"
           onCancel={() => setDeleteUserId(null)}
           onConfirm={() => deleteUser(deleteUserId)}
+        />
+      )}
+      {deleteGitRepositoryId && (
+        <ConfirmDialog
+          title="Remove Repository"
+          message="Are you sure you want to remove this repository?"
+          confirmLabel="Remove Repository"
+          onCancel={() => setDeleteGitRepositoryId(null)}
+          onConfirm={() => deleteGitRepository(deleteGitRepositoryId)}
         />
       )}
       {approveTaskId && (
@@ -2689,6 +2920,72 @@ export default function Home() {
     );
   }
 
+  function GitWorkspacePage() {
+    return (
+      <div className="space-y-6">
+        {authUser.role === "Admin" && (
+          <Card className="rounded-[18px] border border-[#E5E7EB] bg-[#F8FAFC] p-6 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+            <form className="space-y-4" onSubmit={addGitRepository}>
+              <div>
+                <h2 className="text-[22px] font-bold text-[#111827]">Add Repository</h2>
+                <p className="mt-1 text-sm text-[#6B7280]">Paste a GitHub repository URL to add it to the workspace.</p>
+              </div>
+              <Input
+                label="Repository URL"
+                name="repositoryUrl"
+                placeholder="https://github.com/owner/repository"
+                value={gitRepositoryUrl}
+                onChange={(event) => {
+                  setGitRepositoryUrl(event.target.value);
+                  if (githubWorkspaceMessage) setGitHubWorkspaceMessage(null);
+                }}
+                className="rounded-xl border-[#E5E7EB] bg-white px-4 py-3 text-sm text-[#111827] placeholder:text-[#9CA3AF] focus:border-[#0F172A]"
+                required
+              />
+              <PasswordInput
+                label="GitHub Access Token"
+                name="githubAccessToken"
+                placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                value={gitAccessToken}
+                onChange={(event) => {
+                  setGitAccessToken(event.target.value);
+                  if (githubWorkspaceMessage) setGitHubWorkspaceMessage(null);
+                }}
+                className="text-sm text-[#111827]"
+                required
+              />
+              {githubWorkspaceMessage && (
+                <div
+                  className={`rounded-xl border px-4 py-3 text-sm ${
+                    githubWorkspaceMessage.type === "success"
+                      ? "border-[#E5E7EB] bg-white text-[#111827]"
+                      : "border-[#FCA5A5] bg-[#FEF2F2] text-[#DC2626]"
+                  }`}
+                >
+                  {githubWorkspaceMessage.text}
+                </div>
+              )}
+              <Button type="submit" className="rounded-xl border-[#0F172A] bg-[#0F172A] px-4 py-2.5 text-white hover:bg-[#111827]">
+                Test Access &amp; Add Repository
+              </Button>
+            </form>
+          </Card>
+        )}
+        {authUser.role !== "Admin" && githubWorkspaceMessage && (
+          <Card className="rounded-[18px] border border-[#FCA5A5] bg-[#FEF2F2] p-4">
+            <div className="text-sm text-[#DC2626]">{githubWorkspaceMessage.text}</div>
+          </Card>
+        )}
+        <GitHubWorkspaceSection
+          workspace={githubWorkspace}
+          loading={githubWorkspaceLoading}
+          isAdmin={authUser.role === "Admin"}
+          onDeleteRepository={(repositoryId) => setDeleteGitRepositoryId(repositoryId)}
+        />
+      </div>
+    );
+  }
+
   function LoginHistoryModal({ user, onClose }: { user?: User; onClose: () => void }) {
     const records = user ? loginHistoryForUser(user.name) : [];
     const workSections = buildWorkHistorySections(developerWorkSessions, clockTick);
@@ -3172,6 +3469,111 @@ function DashboardNavCard({
     >
       <StatCard label={label} value={value} />
     </button>
+  );
+}
+
+function GitHubWorkspaceSection({
+  workspace,
+  loading,
+  isAdmin,
+  onDeleteRepository,
+}: {
+  workspace: GitHubWorkspace | null;
+  loading: boolean;
+  isAdmin: boolean;
+  onDeleteRepository: (repositoryId: string) => void;
+}) {
+  return (
+    <section className="rounded-[18px] border border-[#E5E7EB] bg-[#F3F4F6] px-6 py-6 text-[#111827]">
+      <div className="mb-6">
+        <h2 className="text-[22px] font-bold text-[#111827]">GitHub Workspace</h2>
+        <p className="mt-1 text-sm text-[#6B7280]">Connected repositories and active development access.</p>
+      </div>
+
+      {loading ? (
+        <div className="rounded-2xl border border-[#E5E7EB] bg-white px-5 py-6 text-sm text-[#6B7280] shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+          Loading GitHub workspace data.
+        </div>
+      ) : workspace?.repositories.length ? (
+        <div className="grid gap-5 lg:grid-cols-2">
+          {workspace.repositories.map((repository) => (
+            <article
+              key={repository.fullName}
+              className="rounded-2xl border border-[#E5E7EB] bg-white p-[22px] text-[#111827] shadow-[0_8px_24px_rgba(15,23,42,0.04)]"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-1">
+                  <h3 className="text-[18px] font-bold text-[#111827]">{repository.name}</h3>
+                  <div className="text-sm text-[#6B7280]">{repository.fullName}</div>
+                </div>
+                {isAdmin && (
+                  <Button
+                    variant="danger"
+                    className="rounded-[10px] border-[#FCA5A5] bg-white px-[14px] py-2 text-[#DC2626] hover:bg-[#FEF2F2]"
+                    onClick={() => onDeleteRepository(repository.id)}
+                  >
+                    Delete
+                  </Button>
+                )}
+              </div>
+
+              <div className="mt-5 space-y-3 text-sm text-[#374151]">
+                <div>
+                  <span className="font-medium text-[#111827]">Language:</span>{" "}
+                  <span className="text-[#374151]">{repository.language}</span>
+                </div>
+                <div>
+                  <span className="font-medium text-[#111827]">Last Updated:</span>{" "}
+                  <span className="text-[#374151]">{formatGitHubUpdatedDate(repository.updatedAt)}</span>
+                </div>
+                <div>
+                  <span className="font-medium text-[#111827]">URL:</span>{" "}
+                  <a
+                    href={repository.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="break-all text-[#0F172A] underline underline-offset-2 hover:text-black"
+                  >
+                    {repository.url}
+                  </a>
+                </div>
+              </div>
+
+              <div className="mt-6 rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-4">
+                <div className="mb-3 text-sm font-semibold text-[#111827]">Working Developers</div>
+                <div className="flex flex-wrap items-center gap-2.5">
+                  {repository.workingDevelopers.length > 0 ? (
+                    repository.workingDevelopers.map((developer) => (
+                      <div
+                        key={`${repository.fullName}-${developer.login}`}
+                        className="group relative"
+                      >
+                        <div
+                          tabIndex={0}
+                          aria-label={developer.name}
+                          className="flex h-10 w-10 items-center justify-center rounded-full border border-[#E5E7EB] bg-white text-xs font-semibold text-[#111827] shadow-[0_4px_10px_rgba(15,23,42,0.04)] outline-none"
+                        >
+                          {developer.initials}
+                        </div>
+                        <div className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 -translate-x-1/2 translate-y-1 whitespace-nowrap rounded-[6px] bg-[#1D4ED8] px-2 py-1 text-[12px] font-medium text-white opacity-0 shadow-[0_6px_16px_rgba(15,23,42,0.18)] transition-all duration-100 group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
+                          {developer.name}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <span className="text-sm text-[#6B7280]">No collaborators available.</span>
+                  )}
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-2xl border border-[#E5E7EB] bg-white px-5 py-6 text-sm text-[#6B7280] shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+          No GitHub repositories are configured for this workspace.
+        </div>
+      )}
+    </section>
   );
 }
 
